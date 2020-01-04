@@ -7,8 +7,10 @@
 
 package io.vlingo.symbio.store.state.jdbc;
 
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.HashMap;
@@ -40,6 +42,7 @@ import io.vlingo.symbio.store.state.StateStoreEntryReader;
 import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
 
 public class JDBCStateStoreActor extends Actor implements StateStore {
+
   private final JDBCStorageDelegate<TextState> delegate;
   private final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher;
   private final DispatcherControl dispatcherControl;
@@ -51,16 +54,17 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
     this(null, delegate, 0L, 0L);
   }
 
-  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher, final JDBCStorageDelegate<TextState> delegate) {
+  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher,
+                             final JDBCStorageDelegate<TextState> delegate) {
     this(dispatcher, delegate, 1000L, 1000L);
   }
 
-  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher, final JDBCStorageDelegate<TextState> delegate,
-          final long checkConfirmationExpirationInterval, final long confirmationExpiration) {
+  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher,
+                             final JDBCStorageDelegate<TextState> delegate,
+                             final long checkConfirmationExpirationInterval,
+                             final long confirmationExpiration) {
     this.delegate = delegate;
-
     this.entryReaders = new HashMap<>();
-
     this.entryAdapterProvider = EntryAdapterProvider.instance(stage().world());
     this.stateAdapterProvider = StateAdapterProvider.instance(stage().world());
 
@@ -198,11 +202,15 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
   @SuppressWarnings("rawtypes")
   private <C> List<Entry<?>> appendEntries(final List<Source<C>> sources, final int stateVersion, final Metadata metadata) {
     if (sources.isEmpty()) return Collections.emptyList();
+    Connection connection = null;
+
     try {
+      connection = createOrReuse(delegate.connection);
+      // final Delegate delegate = getOrCreateDelegate(connection)
       final List<Entry<?>> adapted = entryAdapterProvider.asEntries(sources, stateVersion, metadata);
       for (final Entry<?> entry : adapted) {
         long id = -1L;
-        final PreparedStatement appendStatement = delegate.appendExpressionFor(entry);
+        final PreparedStatement appendStatement = delegate.appendExpressionFor(entry, connection);
         final int count = appendStatement.executeUpdate();
         if (count == 1) {
           final PreparedStatement queryLastIdentityStatement = delegate.appendIdentityExpression();
@@ -223,7 +231,29 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
     } catch (final Exception e) {
       final String message = "Failed to append entry because: " + e.getMessage();
       logger().error(message, e);
+      closeConnection(connection);
       throw new IllegalStateException(message, e);
+    }
+  }
+
+  private void closeConnection(Connection connection) {
+    try {
+      if (connection != null) {
+        connection.close();
+      }
+    } catch (SQLException ignored) {}
+  }
+
+  /// Move this off to a ConnectionProvider/DataSource actor for isolation from the actor concern
+  private Connection createOrReuse(final Connection connection) {
+    try {
+      if (connection == null || connection.isClosed()) {
+        // Use connectionProvider here to get a new connection, yo!
+        return delegate.connection();
+      }
+      return connection;
+    } catch (SQLException sqlEx) {
+      throw new IllegalStateException(sqlEx.getMessage(), sqlEx);
     }
   }
 

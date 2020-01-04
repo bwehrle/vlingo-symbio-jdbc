@@ -7,14 +7,26 @@
 
 package io.vlingo.symbio.store.common.jdbc;
 
+import java.io.Closeable;
 import java.sql.PreparedStatement;
 
-public class CachedStatement<T> {
+public class CachedStatement<T> implements Closeable {
   public final T data;
   public final PreparedStatement preparedStatement;
 
   public CachedStatement(final PreparedStatement preparedStatement, final T data) {
     this.preparedStatement = preparedStatement;
     this.data = data;
+  }
+
+  @Override
+  public void close() {
+    try {
+      if (preparedStatement != null && !preparedStatement.isClosed()) {
+        preparedStatement.close();
+      }
+    } catch (Exception ignored) {
+
+    }
   }
 }

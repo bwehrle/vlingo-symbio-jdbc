@@ -19,9 +19,8 @@ import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import io.vlingo.actors.Logger;
@@ -42,6 +41,7 @@ import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
 
 public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
         DispatcherControl.DispatcherControlDelegate<Entry<?>, State<?>> {
+
   private static final String DISPATCHEABLE_ENTRIES_DELIMITER = "|";
   protected final Connection connection;
   protected final JDBCDispatchableCachedStatements<T> dispatchableCachedStatements;
@@ -49,8 +49,9 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   protected final Logger logger;
   protected Mode mode;
   protected final String originatorId;
-  protected final Map<String, CachedStatement<T>> readStatements;
-  protected final Map<String, CachedStatement<T>> writeStatements;
+  protected JDBCStoreStatementCache storeReadStatementCache;
+  protected JDBCStoreStatementCache storeWriteStatementCache;
+  private boolean isClosed;
 
   protected JDBCStorageDelegate(
           final Connection connection,
@@ -64,22 +65,26 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
     this.originatorId = originatorId;
     this.logger = logger;
     this.mode = Mode.None;
+    this.isClosed = false;
+
+    // This responsibility is not coherent with this class;
+    // setup should be done as a function of the actor, not the delegate
     if (createTables) createTables();
     this.dispatchableCachedStatements = dispatchableCachedStatements();
-    this.readStatements = new HashMap<>();
-    this.writeStatements = new HashMap<>();
+    this.storeReadStatementCache = new JDBCStoreStatementCache();
+    this.storeWriteStatementCache = new JDBCStoreStatementCache();
   }
 
   @SuppressWarnings("unchecked")
-  public <A, E> A appendExpressionFor(final Entry<E> entry) throws Exception {
-    final CachedStatement<T> cachedStatement = dispatchableCachedStatements.appendEntryStatement();
+  public <A, E> A appendExpressionFor(final Entry<E> entry, final Connection connection) throws Exception {
+    final CachedStatement<T> cachedStatement = dispatchableCachedStatements.appendEntryStatement(connection);
     prepareForAppend(cachedStatement, entry);
     return (A) cachedStatement.preparedStatement;
   }
 
   @SuppressWarnings("unchecked")
   public <A> A appendIdentityExpression() {
-    final CachedStatement<T> cachedStatement = dispatchableCachedStatements.appendEntryIdentityStatement();
+    final CachedStatement<T> cachedStatement = dispatchableCachedStatements.appendEntryIdentityStatement(connection());
     return (A) cachedStatement.preparedStatement;
   }
 
@@ -87,7 +92,8 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   public Collection<Dispatchable<Entry<?>, State<?>>> allUnconfirmedDispatchableStates() throws Exception {
     final List<Dispatchable<Entry<?>, State<?>>> dispatchables = new ArrayList<>();
 
-    try (final ResultSet result = dispatchableCachedStatements.queryAllStatement().preparedStatement.executeQuery()) {
+    final CachedStatement<T> queryAllStatement = dispatchableCachedStatements.queryAllStatement(connection());
+    try (final ResultSet result = queryAllStatement.preparedStatement.executeQuery()) {
       while (result.next()) {
         final Dispatchable<Entry<?>, State<?>> dispatchable = dispatchableFrom(result);
         dispatchables.add(dispatchable);
@@ -126,10 +132,10 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   public void close() {
     try {
       mode = Mode.None;
-      final Connection connection = connection();
-      if (connection != null) {
-        connection.close();
-      }
+      storeWriteStatementCache.close();
+      storeReadStatementCache.close();
+      dispatchableCachedStatements.close();
+      isClosed = true;
     } catch (final Exception e) {
       logger.error(getClass().getSimpleName() + ": Could not close because: " + e.getMessage(), e);
     }
@@ -137,12 +143,7 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
 
   @Override
   public boolean isClosed() {
-    try {
-      return connection == null || connection.isClosed();
-    }
-    catch (final SQLException ex) {
-      return true;
-    }
+    return isClosed;
   }
 
   public void complete() throws Exception {
@@ -159,9 +160,9 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   public void confirmDispatched(final String dispatchId) {
     try {
       beginWrite();
-      dispatchableCachedStatements.deleteStatement().preparedStatement.clearParameters();
-      dispatchableCachedStatements.deleteStatement().preparedStatement.setString(1, dispatchId);
-      dispatchableCachedStatements.deleteStatement().preparedStatement.executeUpdate();
+      final CachedStatement<T> deleteStatement = dispatchableCachedStatements.deleteStatement(connection());
+      deleteStatement.preparedStatement.setString(1, dispatchId);
+      deleteStatement.preparedStatement.executeUpdate();
       complete();
     } catch (final Exception e) {
       fail();
@@ -173,11 +174,11 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
 
   @SuppressWarnings("unchecked")
   public <W, S> W dispatchableWriteExpressionFor(final Dispatchable<Entry<?>, State<S>> dispatchable) throws Exception{
-    final PreparedStatement preparedStatement = dispatchableCachedStatements.appendDispatchableStatement().preparedStatement;
+    final CachedStatement<T> appendDispatchableStatement = dispatchableCachedStatements.appendDispatchableStatement(connection());
+    final PreparedStatement preparedStatement = appendDispatchableStatement.preparedStatement;
 
     final State<S> state = dispatchable.typedState();
 
-    preparedStatement.clearParameters();
     preparedStatement.setObject(1, Timestamp.valueOf(dispatchable.createdOn()));
     preparedStatement.setString(2, originatorId);
     preparedStatement.setString(3, dispatchable.id());
@@ -185,9 +186,9 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
     preparedStatement.setString(5, state.type);
     preparedStatement.setInt(6, state.typeVersion);
     if (format.isBinary()) {
-      setBinaryObject(dispatchableCachedStatements.appendDispatchableStatement(), 7, state);
+      setBinaryObject(appendDispatchableStatement, 7, state);
     } else if (state.isText()) {
-      setTextObject(dispatchableCachedStatements.appendDispatchableStatement(), 7, state);
+      setTextObject(appendDispatchableStatement, 7, state);
     }
     preparedStatement.setInt(8, state.dataVersion);
     preparedStatement.setString(9, state.metadata.value);
@@ -241,7 +242,8 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
     if (entriesIds != null && !entriesIds.isEmpty()) {
       final String[] ids = entriesIds.split("\\"+ DISPATCHEABLE_ENTRIES_DELIMITER);
       for (final String entryId : ids) {
-          final PreparedStatement queryEntryStatement = dispatchableCachedStatements.getQueryEntry().preparedStatement;
+        final CachedStatement<T> queryEntryCachedStatement = dispatchableCachedStatements.getQueryEntry(connection());
+        final PreparedStatement queryEntryStatement = queryEntryCachedStatement.preparedStatement;
           queryEntryStatement.clearParameters();
           queryEntryStatement.setObject(1, Long.valueOf(entryId));
           queryEntryStatement.executeQuery();
@@ -250,7 +252,6 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
                entries.add(entryFrom(result, entryId));
              }
           }
-          dispatchableCachedStatements.getQueryEntry().preparedStatement.clearParameters();
       }
     }
     return new Dispatchable<>(dispatchId, createdAt, state, entries);
@@ -287,24 +288,21 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
 
   @SuppressWarnings("unchecked")
   public <R> R readExpressionFor(final String storeName, final String id) throws Exception {
-    final CachedStatement<T> maybeCached = readStatements.get(storeName);
 
-    if (maybeCached == null) {
+    final Supplier<CachedStatement<T>> supplier = () -> {
       final String select = readExpression(storeName, id);
-      final PreparedStatement preparedStatement = connection.prepareStatement(select);
-      final CachedStatement<T> cached = new CachedStatement<>(preparedStatement, null);
-      readStatements.put(storeName, cached);
-      prepareForRead(cached, id);
-      return (R) preparedStatement;
-    }
+      try {
+        final Connection connection = connection();
+        final PreparedStatement preparedStatement = connection.prepareStatement(select);
+        return new CachedStatement<>(preparedStatement, null);
+      } catch (SQLException sqlEx) {
+        throw new IllegalStateException(sqlEx.getMessage(), sqlEx);
+      }
+    };
 
-    prepareForRead(maybeCached, id);
-
-    return (R) maybeCached.preparedStatement;
-  }
-
-  public <S> S session() throws Exception {
-    return null;
+    final CachedStatement<T> cachedStatement = storeReadStatementCache.getOrCreateStatement(storeName, connection(), supplier);
+    prepareForRead(cachedStatement, id);
+    return (R) cachedStatement.preparedStatement;
   }
 
   @Override
@@ -337,20 +335,20 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
 
   @SuppressWarnings("unchecked")
   public <W, S> W writeExpressionFor(final String storeName, final State<S> state) throws Exception {
-    final CachedStatement<T> maybeCached = writeStatements.get(storeName);
-
-    if (maybeCached == null) {
+    final Supplier<CachedStatement<T>> supplier = () -> {
       final String upsert = writeExpression(storeName);
-      final PreparedStatement preparedStatement = connection.prepareStatement(upsert);
-      final CachedStatement<T> cached = new CachedStatement<>(preparedStatement, binaryDataTypeObject());
-      writeStatements.put(storeName, cached);
-      prepareForWrite(cached, state);
-      return (W) cached.preparedStatement;
-    }
-
-    prepareForWrite(maybeCached, state);
-
-    return (W) maybeCached.preparedStatement;
+      final Connection connection = connection();
+      try {
+        final PreparedStatement preparedStatement = connection.prepareStatement(upsert);
+        final CachedStatement<T> cached = new CachedStatement<>(preparedStatement, binaryDataTypeObject());
+        return cached;
+      }catch (Exception ex) {
+        throw new IllegalStateException(ex.getMessage(), ex);
+      }
+    };
+    CachedStatement<T> cachedStatement = storeWriteStatementCache.getOrCreateStatement(storeName, connection, supplier);
+    prepareForWrite(cachedStatement, state);
+    return (W) cachedStatement.preparedStatement;
   }
 
   protected abstract byte[] binaryDataFrom(final ResultSet resultSet, final int columnIndex) throws Exception;
@@ -474,8 +472,6 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   }
 
   private <S> void prepareForWrite(final CachedStatement<T> cached, final State<S> state) throws Exception {
-    cached.preparedStatement.clearParameters();
-
     cached.preparedStatement.setString(1, state.id);
     cached.preparedStatement.setString(2, state.type);
     cached.preparedStatement.setInt(3, state.typeVersion);
