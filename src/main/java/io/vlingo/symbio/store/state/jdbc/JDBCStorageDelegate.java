@@ -38,7 +38,7 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
 
   private static final String DISPATCHEABLE_ENTRIES_DELIMITER = "|";
   protected Connection connection;
-  protected final JDBCDispatchableCachedStatements<T> dispatchableCachedStatements;
+  protected JDBCDispatchableCachedStatements<T> dispatchableCachedStatements;
   protected final DataFormat format;
   protected final Logger logger;
   protected Mode mode;
@@ -63,7 +63,6 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
     this.createTables = createTables;
     this.hasCreatedTables = false;
 
-    this.dispatchableCachedStatements = dispatchableCachedStatements();
     this.storeReadStatementCache = new JDBCStoreStatementCache();
     this.storeWriteStatementCache = new JDBCStoreStatementCache();
 
@@ -488,16 +487,17 @@ public abstract class JDBCStorageDelegate<T> implements StorageDelegate,
   public void provisionConnection(final Connection provisionedConnection) {
     if (this.connection == null || this.connection != provisionedConnection) {
       this.connection = provisionedConnection;
-
       if (createTables && !hasCreatedTables) {
         createTables();
         hasCreatedTables = true;
       }
+      if (dispatchableCachedStatements != null) {
+        dispatchableCachedStatements.closeAll();
+      }
 
+      dispatchableCachedStatements = dispatchableCachedStatements();
       storeReadStatementCache.closeAndRemoveAll();
       storeWriteStatementCache.closeAndRemoveAll();
-      dispatchableCachedStatements.closeAll();
-
     }
   }
 }

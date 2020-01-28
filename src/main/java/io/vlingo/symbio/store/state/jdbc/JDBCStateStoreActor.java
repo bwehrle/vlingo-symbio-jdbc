@@ -72,11 +72,15 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
 
     if (dispatcher!=null){
       this.dispatcher = dispatcher;
+      provisionConnection();
+      JDBCStorageDelegate delegateCopy = (JDBCStorageDelegate) delegate.copy();
+      delegateCopy.provisionConnection(connection);
+
       this.dispatcherControl = stage().actorFor(
         DispatcherControl.class,
         Definition.has(
           DispatcherControlActor.class,
-          Definition.parameters(dispatcher, delegate.copy(), checkConfirmationExpirationInterval, confirmationExpiration))
+          Definition.parameters(dispatcher, delegateCopy, checkConfirmationExpirationInterval, confirmationExpiration))
       );
     } else {
       this.dispatcher = null;
