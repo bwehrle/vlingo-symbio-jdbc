@@ -7,13 +7,6 @@
 
 package io.vlingo.symbio.store.state.jdbc.postgres;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.text.MessageFormat;
-
-import io.vlingo.symbio.store.state.jdbc.DbStateStoreEntryReaderActor;
-import org.postgresql.util.PGobject;
-
 import io.vlingo.actors.Logger;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.State;
@@ -23,15 +16,22 @@ import io.vlingo.symbio.store.EntryReader.Advice;
 import io.vlingo.symbio.store.common.jdbc.CachedStatement;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
+import io.vlingo.symbio.store.state.jdbc.DbStateStoreEntryReaderActor;
 import io.vlingo.symbio.store.state.jdbc.JDBCDispatchableCachedStatements;
 import io.vlingo.symbio.store.state.jdbc.JDBCStorageDelegate;
+import org.postgresql.util.PGobject;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.text.MessageFormat;
 
 public class PostgresStorageDelegate extends JDBCStorageDelegate<Object> implements StorageDelegate, PostgresQueries {
     private final Configuration configuration;
 
-    public PostgresStorageDelegate(final Configuration configuration, final Logger logger) {
-        super(configuration.connection,
-                configuration.format,
+    public PostgresStorageDelegate(final Connection connection,
+                                   final Configuration configuration,
+                                   final Logger logger) {
+        super(  configuration.format,
                 configuration.originatorId,
                 configuration.createTables,
                 logger);
@@ -42,7 +42,7 @@ public class PostgresStorageDelegate extends JDBCStorageDelegate<Object> impleme
     @Override
     public StorageDelegate copy() {
         try {
-            return new PostgresStorageDelegate(Configuration.cloneOf(configuration), logger);
+            return new PostgresStorageDelegate(this.connection, Configuration.cloneOf(configuration), logger);
         } catch (Exception e) {
             final String message = "Copy of StorageDelegate failed because: " + e.getMessage();
             logger.error(message, e);

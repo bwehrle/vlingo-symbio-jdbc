@@ -7,15 +7,9 @@
 
 package io.vlingo.symbio.store.state.jdbc.hsqldb;
 
-import java.sql.Blob;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.common.Completes;
+import io.vlingo.common.Tuple2;
 import io.vlingo.symbio.BaseEntry.BinaryEntry;
 import io.vlingo.symbio.BaseEntry.TextEntry;
 import io.vlingo.symbio.Entry;
@@ -23,9 +17,14 @@ import io.vlingo.symbio.Metadata;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.state.StateStoreEntryReader;
 
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
+
 public class HSQLDBStateStoreEntryReaderActor<T extends Entry<?>> extends Actor implements StateStoreEntryReader<T> {
   private final Advice advice;
   private final Configuration configuration;
+  private final Connection connection;
   private long currentId;
   private final String name;
   private final PreparedStatement queryBatch;
@@ -37,15 +36,18 @@ public class HSQLDBStateStoreEntryReaderActor<T extends Entry<?>> extends Actor 
   public HSQLDBStateStoreEntryReaderActor(final Advice advice, final String name) throws Exception {
     this.advice = advice;
     this.name = name;
-    this.configuration = advice.specificConfiguration();
+
+    Tuple2<Configuration, Connection> adviceTuple = advice.specificConfiguration();
+    this.configuration = adviceTuple._1;
+    this.connection = adviceTuple._2;
     this.currentId = 0;
 
     try {
-    this.queryBatch = configuration.connection.prepareStatement(this.advice.queryEntryBatchExpression);
-    this.queryCount = configuration.connection.prepareStatement(this.advice.queryCount);
-    this.queryLatestOffset = configuration.connection.prepareStatement(this.advice.queryLatestOffset);
-    this.queryOne = configuration.connection.prepareStatement(this.advice.queryEntryExpression);
-    this.updateCurrentOffset = configuration.connection.prepareStatement(this.advice.queryUpdateCurrentOffset);
+    this.queryBatch = connection.prepareStatement(this.advice.queryEntryBatchExpression);
+    this.queryCount = connection.prepareStatement(this.advice.queryCount);
+    this.queryLatestOffset = connection.prepareStatement(this.advice.queryLatestOffset);
+    this.queryOne = connection.prepareStatement(this.advice.queryEntryExpression);
+    this.updateCurrentOffset = connection.prepareStatement(this.advice.queryUpdateCurrentOffset);
     } catch (Exception e) {
       System.out.println(e.getMessage());
       e.printStackTrace();
@@ -58,7 +60,7 @@ public class HSQLDBStateStoreEntryReaderActor<T extends Entry<?>> extends Actor 
     try {
       queryBatch.close();
       queryOne.close();
-      configuration.connection.close();
+      connection.close();
     } catch (SQLException e) {
       // ignore
     }
@@ -228,7 +230,7 @@ public class HSQLDBStateStoreEntryReaderActor<T extends Entry<?>> extends Actor 
           updateCurrentOffset.setLong(3, currentId);
 
           updateCurrentOffset.executeUpdate();
-          configuration.connection.commit();
+          connection.commit();
       } catch (Exception e) {
           logger().error("vlingo/symbio-hsqldb: Could not persist the offset. Will retry on next read.");
           logger().error("vlingo/symbio-hsqldb: " + e.getMessage(), e);

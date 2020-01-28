@@ -7,46 +7,46 @@
 
 package io.vlingo.symbio.store.state.jdbc.hsqldb;
 
-import static io.vlingo.symbio.store.common.jdbc.hsqldb.HSQLDBConfigurationProvider.testConfiguration;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNotNull;
-
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-
 import io.vlingo.actors.World;
 import io.vlingo.symbio.Metadata;
 import io.vlingo.symbio.State.BinaryState;
 import io.vlingo.symbio.State.TextState;
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.HSQLBootstrapProvider;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.state.Entity1;
 import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+
+import static org.junit.Assert.*;
 
 public class HSQLDBStorageDelegateTest {
-  private TestConfiguration configuration;
+  private Configuration configuration;
   private HSQLDBStorageDelegate delegate;
   private String entity1StoreName;
   private World world;
+  private DbBootstrap dbBootstrap;
+  private Connection connection;
 
   @Test
   public void testThatDatabaseOpensTablesCreated() throws Exception  {
-    configuration = testConfiguration(DataFormat.Text);
-    delegate = new HSQLDBStorageDelegate(configuration, world.defaultLogger());
-
+    Configuration delegateConfiguration = testConfiguration(DataFormat.Text);
+    createDelegate(delegateConfiguration);
     assertNotNull(delegate);
   }
 
   @Test
   public void testThatTextWritesRead() throws Exception {
-    configuration = testConfiguration(DataFormat.Text);
-    delegate = new HSQLDBStorageDelegate(configuration, world.defaultLogger());
-
+    Configuration delegateConfiguration = testConfiguration(DataFormat.Text);
+    createDelegate(delegateConfiguration);
     assertNotNull(delegate);
 
     final TextState writeState = new TextState("123", Entity1.class, 1, "data", 1, Metadata.with("metadata", "op"));
@@ -67,8 +67,8 @@ public class HSQLDBStorageDelegateTest {
 
   @Test
   public void testThatTextStatesUpdate() throws Exception {
-    configuration = testConfiguration(DataFormat.Text);
-    delegate = new HSQLDBStorageDelegate(configuration, world.defaultLogger());
+    Configuration delegateConfiguration = testConfiguration(DataFormat.Text);
+    createDelegate(delegateConfiguration);
 
     assertNotNull(delegate);
 
@@ -107,8 +107,8 @@ public class HSQLDBStorageDelegateTest {
 
   @Test
   public void testThatBinaryWritesRead() throws Exception {
-    configuration = testConfiguration(DataFormat.Binary);
-    delegate = new HSQLDBStorageDelegate(configuration, world.defaultLogger());
+    Configuration delegateConfiguration = testConfiguration(DataFormat.Binary);
+    createDelegate(delegateConfiguration);
 
     assertNotNull(delegate);
 
@@ -132,14 +132,31 @@ public class HSQLDBStorageDelegateTest {
   public void setUp() {
     world = World.startWithDefaults("test-store");
 
+    dbBootstrap = new HSQLBootstrapProvider().getBootstrap(DataFormat.Text);
+    configuration = dbBootstrap.createRandomDatabase();
+    connection = new ConnectionProvider(configuration).connection();
+
     entity1StoreName = Entity1.class.getSimpleName();
     StateTypeStateStoreMap.stateTypeToStoreName(Entity1.class, entity1StoreName);
   }
 
+
   @After
   public void tearDown() throws Exception {
-    configuration.cleanUp();
     delegate.close();
+    connection.close();
+    dbBootstrap.dropDatabase(configuration.databaseName);
+    dbBootstrap.stopService();
     world.terminate();
   }
+
+  protected Configuration testConfiguration(final DataFormat dataFormat) {
+    return configuration.withFormat(dataFormat);
+  }
+
+  protected void createDelegate(Configuration delegateConfiguration) {
+    delegate = new HSQLDBStorageDelegate(delegateConfiguration, world.defaultLogger());
+    delegate.provisionConnection(connection);
+  }
+
 }

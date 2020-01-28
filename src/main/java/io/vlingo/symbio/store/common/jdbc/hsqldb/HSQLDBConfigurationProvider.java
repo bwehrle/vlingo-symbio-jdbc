@@ -7,46 +7,11 @@
 
 package io.vlingo.symbio.store.common.jdbc.hsqldb;
 
-import java.sql.Connection;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import org.hsqldb.server.Server;
-
 import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.common.jdbc.Configuration.ConfigurationInterest;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 
 public class HSQLDBConfigurationProvider {
-  public static final ConfigurationInterest interest = new ConfigurationInterest() {
-    private Server databaseSever;
-    private AtomicInteger databaseCount = new AtomicInteger(0);
-
-    @Override
-    public void afterConnect(final Connection connection) {
-
-    }
-
-    @Override public void createDatabase(final Connection connection, final String databaseName) {
-      databaseCount.incrementAndGet();
-    }
-
-    @Override public void dropDatabase(final Connection connection, final String databaseName) {
-      boolean isDone = databaseCount.decrementAndGet() == 0;
-      if (isDone) {
-        databaseSever.shutdown();
-        databaseSever = null;
-      }
-    }
-
-    @Override
-    public void beforeConnect(final Configuration configuration) {
-      if (databaseSever != null) return;
-      databaseSever = new Server();
-      databaseSever.start();
-    }
-  };
 
   public static Configuration configuration(
           final DataFormat format,
@@ -55,11 +20,9 @@ public class HSQLDBConfigurationProvider {
           final String username,
           final String password,
           final String originatorId,
-          final boolean createTables)
-  throws Exception {
+          final boolean createTables) {
     return new Configuration(
             DatabaseType.HSQLDB,
-            interest,
             "org.hsqldb.jdbc.JDBCDriver",
             format,
             url,
@@ -71,22 +34,4 @@ public class HSQLDBConfigurationProvider {
             createTables);
   }
 
-  public static TestConfiguration testConfiguration(final DataFormat format) throws Exception {
-    return testConfiguration(format, "testdb");
-  }
-
-  public static TestConfiguration testConfiguration(final DataFormat format, final String databaseName) throws Exception {
-    return new TestConfiguration(
-            DatabaseType.HSQLDB,
-            interest,
-            "org.hsqldb.jdbc.JDBCDriver",
-            format,
-            "jdbc:hsqldb:mem:",
-            databaseName,       // database name
-            "SA",           // username
-            "",             // password
-            false,          // useSSL
-            "TEST",         // originatorId
-            true);          // create tables
-  }
 }

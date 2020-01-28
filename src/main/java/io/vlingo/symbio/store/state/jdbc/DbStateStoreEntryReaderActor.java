@@ -7,26 +7,25 @@
 
 package io.vlingo.symbio.store.state.jdbc;
 
-import java.sql.Blob;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.common.Completes;
+import io.vlingo.common.Tuple2;
 import io.vlingo.symbio.BaseEntry.BinaryEntry;
 import io.vlingo.symbio.BaseEntry.TextEntry;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.Metadata;
+import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.EntryReader;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.state.StateStoreEntryReader;
+
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class DbStateStoreEntryReaderActor<T extends Entry<?>> extends Actor implements StateStoreEntryReader<T> {
   private final Advice advice;
-  private final Configuration configuration;
+  private final Connection connection;
+  private final DataFormat dataFormat;
   private long currentId;
   private final String name;
   private final PreparedStatement queryBatch;
@@ -38,22 +37,27 @@ public class DbStateStoreEntryReaderActor<T extends Entry<?>> extends Actor impl
   public DbStateStoreEntryReaderActor(final EntryReader.Advice advice, final String name) throws Exception {
     this.advice = advice;
     this.name = name;
-    this.configuration = advice.specificConfiguration();
+    Tuple2<Connection, DataFormat> parameterTuple = advice.specificConfiguration();
+    this.connection = parameterTuple._1;
+    this.dataFormat = parameterTuple._2;
+
     this.currentId = 0;
 
-    this.queryBatch = configuration.connection.prepareStatement(this.advice.queryEntryBatchExpression);
-    this.queryCount = configuration.connection.prepareStatement(this.advice.queryCount);
-    this.queryLatestOffset = configuration.connection.prepareStatement(this.advice.queryLatestOffset);
-    this.queryOne = configuration.connection.prepareStatement(this.advice.queryEntryExpression);
-    this.updateCurrentOffset = configuration.connection.prepareStatement(this.advice.queryUpdateCurrentOffset);
+    this.queryBatch = connection.prepareStatement(this.advice.queryEntryBatchExpression);
+    this.queryCount = connection.prepareStatement(this.advice.queryCount);
+    this.queryLatestOffset = connection.prepareStatement(this.advice.queryLatestOffset);
+    this.queryOne = connection.prepareStatement(this.advice.queryEntryExpression);
+    this.updateCurrentOffset = connection.prepareStatement(this.advice.queryUpdateCurrentOffset);
   }
 
   @Override
   public void close() {
     try {
-      queryBatch.close();
-      queryOne.close();
-      configuration.connection.close();
+        queryBatch.close();
+        queryCount.close();
+        queryLatestOffset.close();
+        queryOne.close();
+        updateCurrentOffset.close();
     } catch (SQLException e) {
       // ignore
     }
@@ -178,7 +182,7 @@ public class DbStateStoreEntryReaderActor<T extends Entry<?>> extends Actor impl
 
     final Metadata metadata = Metadata.with(metadataValue, metadataOperation);
 
-    if (configuration.format.isBinary()) {
+    if (dataFormat.isBinary()) {
       return new BinaryEntry(String.valueOf(id), typed(type), typeVersion, binaryDataFrom(result, 4), metadata);
     } else {
       return new TextEntry(String.valueOf(id), typed(type), typeVersion, textDataFrom(result, 4), metadata);
@@ -224,7 +228,7 @@ public class DbStateStoreEntryReaderActor<T extends Entry<?>> extends Actor impl
           updateCurrentOffset.setLong(3, currentId);
 
           updateCurrentOffset.executeUpdate();
-          configuration.connection.commit();
+          connection.commit();
       } catch (Exception e) {
           logger().error("vlingo/symbio-postgres: Could not persist the offset. Will retry on next read.");
           logger().error("vlingo/symbio-postgres: " + e.getMessage(), e);

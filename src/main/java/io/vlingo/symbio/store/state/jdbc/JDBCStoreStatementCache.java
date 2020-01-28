@@ -2,26 +2,21 @@ package io.vlingo.symbio.store.state.jdbc;
 
 import io.vlingo.symbio.store.common.jdbc.CachedStatement;
 
-import java.io.Closeable;
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
-public class JDBCStoreStatementCache<T> implements Closeable {
+public class JDBCStoreStatementCache<T>  {
 
   protected Map<String, CachedStatement<T>> statementsForStore;
-  protected Connection lastConnection;
 
   JDBCStoreStatementCache() {
-    lastConnection = null;
     statementsForStore = new HashMap<>();
   }
 
-  @Override
-  public void close() {
+  public void closeAndRemoveAll() {
     statementsForStore.forEach( (k, cs) -> {
       try {
         cs.preparedStatement.close();
@@ -30,18 +25,12 @@ public class JDBCStoreStatementCache<T> implements Closeable {
     statementsForStore.clear();
   }
 
-  private void clearCacheOnConnection(Connection connection) {
-    if (!connection.equals(lastConnection)) {
-      close();
-      lastConnection = connection;
-    }
-  }
-
   public CachedStatement<T> getOrCreateStatement(final String storeId,
-                                                     final Connection connection,
-                                                     final Supplier<CachedStatement<T>> supplier) {
-    clearCacheOnConnection(connection);
-    CachedStatement<T> cachedStatement =  statementsForStore.computeIfAbsent(storeId, (s -> supplier.get()));
+                                                 final Connection connection,
+                                                 final Function<Connection, CachedStatement<T>> supplier) {
+
+    CachedStatement<T> cachedStatement = statementsForStore.computeIfAbsent(storeId,
+            s -> supplier.apply(connection));
     return cleanStatementParameters(cachedStatement);
   }
 

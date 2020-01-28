@@ -8,8 +8,8 @@
 package io.vlingo.symbio.store.state.jdbc.postgres;
 
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
-import io.vlingo.symbio.store.common.jdbc.postgres.PostgresConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.PostgresBootstrap;
 import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
 import io.vlingo.symbio.store.state.jdbc.JDBCStateStoreActorTest;
 
@@ -18,12 +18,11 @@ public class PostgresJDBCStateStoreActorTest extends JDBCStateStoreActorTest {
     @Override
     protected StorageDelegate delegate() throws Exception {
         System.out.println("Starting: PostgresJDBCTextStateStoreActorTest: delegate()");
-        return new PostgresStorageDelegate(configuration, world.defaultLogger());
+        return new PostgresStorageDelegate(connection, configuration, world.defaultLogger());
     }
 
     @Override
-    protected TestConfiguration testConfiguration(DataFormat format) throws Exception {
-        System.out.println("Starting: PostgresJDBCTextStateStoreActorTest: testConfiguration()");
-        return PostgresConfigurationProvider.testConfiguration(DataFormat.Text);
+    protected DbBootstrap getBootstrap(DataFormat dataFormat) {
+        return new PostgresBootstrap().getBootstrap(dataFormat);
     }
 }

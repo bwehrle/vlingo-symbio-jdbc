@@ -7,13 +7,6 @@
 
 package io.vlingo.symbio.store.object.jdbc;
 
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.actors.Address;
 import io.vlingo.actors.Definition;
@@ -23,27 +16,25 @@ import io.vlingo.common.Failure;
 import io.vlingo.common.Scheduled;
 import io.vlingo.common.Success;
 import io.vlingo.common.identity.IdentityGenerator;
-import io.vlingo.symbio.Entry;
-import io.vlingo.symbio.EntryAdapterProvider;
-import io.vlingo.symbio.Metadata;
-import io.vlingo.symbio.Source;
-import io.vlingo.symbio.State;
+import io.vlingo.symbio.*;
 import io.vlingo.symbio.store.EntryReader;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.StorageException;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 import io.vlingo.symbio.store.dispatch.Dispatchable;
 import io.vlingo.symbio.store.dispatch.Dispatcher;
 import io.vlingo.symbio.store.dispatch.DispatcherControl;
 import io.vlingo.symbio.store.dispatch.control.DispatcherControlActor;
-import io.vlingo.symbio.store.object.ObjectStore;
-import io.vlingo.symbio.store.object.ObjectStoreEntryReader;
-import io.vlingo.symbio.store.object.QueryExpression;
-import io.vlingo.symbio.store.object.StateObject;
-import io.vlingo.symbio.store.object.StateSources;
+import io.vlingo.symbio.store.object.*;
 import io.vlingo.symbio.store.object.jdbc.jdbi.JdbiObjectStoreEntryReaderActor;
 import io.vlingo.symbio.store.object.jdbc.jdbi.JdbiOnDatabase;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.*;
 
 /**
  * The actor implementing the {@code ObjectStore} protocol in behalf of
@@ -51,6 +42,7 @@ import io.vlingo.symbio.store.object.jdbc.jdbi.JdbiOnDatabase;
  */
 public class JDBCObjectStoreActor extends Actor implements ObjectStore, Scheduled<Object> {
   private final DispatcherControl dispatcherControl;
+  private final ConnectionProvider connectionProvider;
   private boolean closed;
   private final JDBCObjectStoreDelegate delegate;
   private final Dispatcher<Dispatchable<Entry<?>, State<?>>> dispatcher;
@@ -58,15 +50,22 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
   private final Logger logger;
   private final EntryAdapterProvider entryAdapterProvider;
   private final IdentityGenerator identityGenerator;
+  private Connection connection;
 
-  public JDBCObjectStoreActor(final JDBCObjectStoreDelegate delegate, final Dispatcher<Dispatchable<Entry<?>, State<?>>> dispatcher) {
-     this(delegate, dispatcher, 1000L, 1000L);
+  public JDBCObjectStoreActor(final JDBCObjectStoreDelegate delegate,
+                              final ConnectionProvider connectionProvider,
+                              final Dispatcher<Dispatchable<Entry<?>, State<?>>> dispatcher) {
+     this(delegate, connectionProvider, dispatcher, 1000L, 1000L);
   }
 
   @SuppressWarnings("unchecked")
-  public JDBCObjectStoreActor(final JDBCObjectStoreDelegate delegate, final Dispatcher<Dispatchable<Entry<?>, State<?>>> dispatcher,
-          final long checkConfirmationExpirationInterval, final long confirmationExpiration) {
+  public JDBCObjectStoreActor(final JDBCObjectStoreDelegate delegate,
+                              final ConnectionProvider connectionProvider,
+                              final Dispatcher<Dispatchable<Entry<?>, State<?>>> dispatcher,
+                              final long checkConfirmationExpirationInterval,
+                              final long confirmationExpiration) {
     this.delegate = delegate;
+    this.connectionProvider = connectionProvider;
     this.dispatcher = dispatcher;
     this.closed = false;
     this.logger = stage().world().defaultLogger();
@@ -77,13 +76,14 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
     final long timeout = delegate.configuration.transactionTimeoutMillis;
     stage().scheduler().schedule(selfAs(Scheduled.class), null, timeout, timeout);
 
+    final JDBCObjectStoreDelegate dispatcherDelegate = (JDBCObjectStoreDelegate) delegate.copy();
     this.dispatcherControl = stage().actorFor(
             DispatcherControl.class,
             Definition.has(
                     DispatcherControlActor.class,
                     Definition.parameters(
-                            //Get a copy of storage delegate to use other connection
-                            dispatcher, delegate.copy(),
+                            dispatcher,
+                            dispatcherDelegate,
                             checkConfirmationExpirationInterval,
                             confirmationExpiration)));
   }
@@ -95,6 +95,14 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
   public void close() {
     if (!closed) {
       delegate.close();
+      try {
+        entryReaders.forEach( (k, reader) -> reader.close());
+        entryReaders.clear();
+        if (connection != null && !connection.isClosed()) {
+          connection.close();
+        }
+      }catch (Exception ignored){}
+
       if ( this.dispatcherControl != null ){
         this.dispatcherControl.stop();
       }
@@ -107,28 +115,37 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
   public Completes<EntryReader<? extends Entry<?>>> entryReader(final String name) {
     ObjectStoreEntryReader<? extends Entry<?>> entryReader = entryReaders.get(name);
     if (entryReader == null) {
-      final Configuration clonedConfiguration = Configuration.cloneOf(delegate.configuration);
-      final Address address = stage().world().addressFactory().uniquePrefixedWith("objectStoreEntryReader-" + name);
-      final Class<? extends Actor> actorType;
-      List<Object> parameters = null;
+      try {
+        reuseOrOpenConnection();
+        final Configuration clonedConfiguration = Configuration.cloneOf(delegate.configuration);
+        final Address address = stage().world().addressFactory().uniquePrefixedWith("objectStoreEntryReader-" + name);
+        final Class<? extends Actor> actorType;
+        List<Object> parameters = null;
 
-      switch (delegate.type()) {
-      case Jdbi:
-        actorType = JdbiObjectStoreEntryReaderActor.class;
-        parameters = Definition.parameters(JdbiOnDatabase.openUsing(clonedConfiguration), delegate.registeredMappers(), name);
-        break;
-      case JDBC:
-      case JPA:
-        actorType = JDBCObjectStoreEntryReaderActor.class;
-        parameters = Definition.parameters(DatabaseType.databaseType(clonedConfiguration.connection), clonedConfiguration.connection, name);
-        break;
-      default:
-        throw new IllegalStateException(getClass().getSimpleName() + ": Cannot create entry reader '" + name + "' due to unknown type: " + delegate.type());
+        switch (delegate.type()) {
+          case Jdbi:
+            actorType = JdbiObjectStoreEntryReaderActor.class;
+            final JdbiOnDatabase jdbiOnDatabase = JdbiOnDatabase.openUsing(clonedConfiguration);
+            jdbiOnDatabase.provisionConnection(connection);
+            parameters = Definition.parameters(jdbiOnDatabase, delegate.registeredMappers(), name);
+            break;
+          case JDBC:
+          case JPA:
+            actorType = JDBCObjectStoreEntryReaderActor.class;
+            parameters = Definition.parameters(DatabaseType.databaseType(connection), connection, name);
+            break;
+          default:
+            throw new IllegalStateException(getClass().getSimpleName() + ": Cannot create entry reader '" + name + "' due to unknown type: " + delegate.type());
+        }
+
+        entryReader = stage().actorFor(ObjectStoreEntryReader.class, Definition.has(actorType, parameters), address);
+        return completes().with(entryReader);
+
+      } catch(Exception ex) {
+        logger.error(ex.getMessage(), ex);
+        throw new IllegalStateException(ex.getMessage(), ex);
       }
-
-      entryReader = stage().actorFor(ObjectStoreEntryReader.class, Definition.has(actorType, parameters), address);
     }
-
     return completes().with(entryReader);
   }
 
@@ -137,6 +154,7 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
     final List<Source<E>> sources = stateSources.sources();
     final T persistentObject = stateSources.stateObject();
     try {
+      reuseOrOpenConnection();
       delegate.beginTransaction();
 
       final State<?> state = delegate.persist(persistentObject, updateId, metadata);
@@ -152,8 +170,8 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
 
       dispatcher.dispatch(dispatchable);
       interest.persistResultedIn(Success.of(Result.Success), persistentObject, 1, 1, object);
-
-    } catch (final StorageException e) {
+    }
+    catch (final StorageException e) {
       logger.error("Persist of: " + persistentObject + " failed because: " + e.getMessage(), e);
       delegate.failTransaction();
       interest.persistResultedIn(Failure.of(e), persistentObject, 1, 0, object);
@@ -162,6 +180,14 @@ public class JDBCObjectStoreActor extends Actor implements ObjectStore, Schedule
       delegate.failTransaction();
       interest.persistResultedIn(Failure.of(new StorageException(Result.Failure, e.getMessage(), e)), persistentObject,
         1, 0, object);
+    }
+  }
+
+  private void reuseOrOpenConnection() throws SQLException {
+    if (connection == null || connection.isClosed()) {
+      entryReaders.forEach((key, reader) -> reader.close());
+      entryReaders.clear();
+      connection = connectionProvider.connection();
     }
   }
 

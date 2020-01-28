@@ -11,10 +11,16 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.sql.Connection;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.UUID;
 
+import io.vlingo.symbio.store.common.BootstrapProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.TestConfiguration;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -29,7 +35,6 @@ import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.common.event.TestEvent;
 import io.vlingo.symbio.store.common.event.TestEventAdapter;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
 import io.vlingo.symbio.store.state.Entity1;
 import io.vlingo.symbio.store.state.Entity1.Entity1StateAdapter;
 import io.vlingo.symbio.store.state.MockResultInterest;
@@ -39,13 +44,15 @@ import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
 import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
 
 public abstract class JDBCStateStoreActorTest {
-  protected TestConfiguration configuration;
+  protected Configuration configuration;
   protected StorageDelegate delegate;
   protected MockTextDispatcher dispatcher;
   protected String entity1StoreName;
   protected MockResultInterest interest;
   protected StateStore store;
   protected World world;
+  private DbBootstrap dbBootstrap;
+  protected Connection connection;
 
   @Test
   public void testThatStateStoreDispatches() throws Exception {
@@ -166,13 +173,15 @@ public abstract class JDBCStateStoreActorTest {
   public void setUp() throws Exception {
     world = World.startWithDefaults("test-store");
 
+    dbBootstrap = getBootstrap(DataFormat.Text);
+    dbBootstrap.startService();
+    configuration = dbBootstrap.createRandomDatabase();
+    connection = new ConnectionProvider(configuration).connection();
+
     entity1StoreName = Entity1.class.getSimpleName();
     StateTypeStateStoreMap.stateTypeToStoreName(Entity1.class, entity1StoreName);
 
-    configuration = testConfiguration(DataFormat.Text);
-
     delegate = delegate();
-
     interest = new MockResultInterest();
     dispatcher = new MockTextDispatcher(0, interest);
 
@@ -182,19 +191,22 @@ public abstract class JDBCStateStoreActorTest {
 
     store = world.actorFor(
             StateStore.class,
-            Definition.has(JDBCStateStoreActor.class, Definition.parameters(dispatcher, delegate)));
+            Definition.has(JDBCStateStoreActor.class,
+                    Definition.parameters(dispatcher, delegate, new ConnectionProvider(configuration))));
   }
 
   @After
   public void tearDown() throws Exception {
     if (configuration == null) return;
     world.terminate();
-    configuration.cleanUp();
     delegate.close();
+    dbBootstrap.dropDatabase(configuration.databaseName);
+    dbBootstrap.stopService();
   }
 
   protected abstract StorageDelegate delegate() throws Exception;
-  protected abstract TestConfiguration testConfiguration(final DataFormat format) throws Exception;
+
+  protected abstract DbBootstrap getBootstrap(DataFormat dataFormat);
 
   private String dispatchId(final String entityId) {
     return entity1StoreName + ":" + entityId;

@@ -7,21 +7,13 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-
-import org.jdbi.v3.core.Handle;
-import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.core.statement.SqlStatement;
-
 import io.vlingo.actors.World;
 import io.vlingo.symbio.BaseEntry.TextEntry;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.State;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 import io.vlingo.symbio.store.dispatch.Dispatchable;
 import io.vlingo.symbio.store.dispatch.Dispatcher;
@@ -31,20 +23,29 @@ import io.vlingo.symbio.store.object.QueryExpression;
 import io.vlingo.symbio.store.object.StateObjectMapper;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreActor;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreEntryJournalQueries;
+import org.jdbi.v3.core.Handle;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.core.statement.SqlStatement;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 
 /**
  * Defines a protocol for using Jdbi over a given database.
  */
 public abstract class JdbiOnDatabase {
     public final Configuration configuration;
-    public final Handle handle;
+    public Handle handle;
 
-    private final JDBCObjectStoreEntryJournalQueries queries;
-
+    private JDBCObjectStoreEntryJournalQueries queries;
     private ObjectStore objectStore;
+    private DatabaseType databaseType;
 
     public static JdbiOnDatabase openUsing(final Configuration configuration) {
-        final DatabaseType databaseType = DatabaseType.databaseType(configuration.connection);
+        final DatabaseType databaseType = configuration.databaseType;
         switch (databaseType) {
             case HSQLDB:
                 return JdbiOnHSQLDB.openUsing(configuration);
@@ -52,9 +53,7 @@ public abstract class JdbiOnDatabase {
             case MariaDB:
                 return JdbiOnMySQL.openUsing(configuration);
             case SQLServer:
-                break;
             case Vitess:
-                break;
             case Oracle:
                 break;
             case Postgres:
@@ -118,7 +117,7 @@ public abstract class JdbiOnDatabase {
      * @return DatabaseType
      */
     public DatabaseType databaseType() {
-        return DatabaseType.databaseType(configuration.connection);
+        return databaseType;
     }
 
     /**
@@ -139,7 +138,8 @@ public abstract class JdbiOnDatabase {
     public ObjectStore objectStore(
             final World world,
             final Dispatcher<Dispatchable<TextEntry, State.TextState>> dispatcher,
-            final Collection<StateObjectMapper> mappers) {
+            final Collection<StateObjectMapper> mappers,
+            final ConnectionProvider connectionProvider) {
         if (objectStore == null) {
             final List<StateObjectMapper> objectMappers = new ArrayList<>(mappers);
             objectMappers.add(textEntryPersistentObjectMapper());
@@ -147,9 +147,18 @@ public abstract class JdbiOnDatabase {
 
             final StateAdapterProvider stateAdapterProvider = StateAdapterProvider.instance(world);
 
-            final JdbiObjectStoreDelegate delegate = new JdbiObjectStoreDelegate(configuration, stateAdapterProvider, unconfirmedDispatchablesQueryExpression(), objectMappers, world.defaultLogger());
+            final JdbiObjectStoreDelegate delegate = new JdbiObjectStoreDelegate(configuration,
+                                                                                connectionProvider,
+                                                                                stateAdapterProvider,
+                                                                                unconfirmedDispatchablesQueryExpression(),
+                                                                                objectMappers,
+                                                                                world.defaultLogger());
 
-            objectStore = world.actorFor(ObjectStore.class, JDBCObjectStoreActor.class, delegate, dispatcher);
+            objectStore = world.actorFor(ObjectStore.class,
+                                            JDBCObjectStoreActor.class,
+                                            delegate,
+                                            new ConnectionProvider(configuration),
+                                            dispatcher);
         }
 
         return objectStore;
@@ -236,10 +245,14 @@ public abstract class JdbiOnDatabase {
         return persistentObjectMapper;
     }
 
+    public void provisionConnection(final Connection connection) {
+        this.handle = Jdbi.open(connection);
+        this.queries = JDBCObjectStoreEntryJournalQueries.using(DatabaseType.databaseType(connection), connection);
+    }
+
     protected JdbiOnDatabase(final Configuration configuration) {
         this.configuration = configuration;
-        this.handle = Jdbi.open(configuration.connection);
-        this.queries = JDBCObjectStoreEntryJournalQueries.using(DatabaseType.databaseType(configuration.connection), configuration.connection);
+        this.databaseType = configuration.databaseType;
     }
 
     private StateObjectMapper dispatchableMapping() {

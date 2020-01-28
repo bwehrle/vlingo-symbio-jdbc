@@ -7,26 +7,6 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
-
-import org.junit.After;
-import org.junit.Assert;
-import org.junit.Before;
-import org.junit.Test;
-
 import io.vlingo.actors.World;
 import io.vlingo.actors.testkit.AccessSafely;
 import io.vlingo.actors.testkit.TestUntil;
@@ -38,29 +18,40 @@ import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.StorageException;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.HSQLBootstrapProvider;
 import io.vlingo.symbio.store.common.MockDispatcher;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
-import io.vlingo.symbio.store.common.jdbc.hsqldb.HSQLDBConfigurationProvider;
 import io.vlingo.symbio.store.dispatch.Dispatchable;
-import io.vlingo.symbio.store.object.ListQueryExpression;
-import io.vlingo.symbio.store.object.MapQueryExpression;
-import io.vlingo.symbio.store.object.ObjectStore;
+import io.vlingo.symbio.store.object.*;
 import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMode;
 import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMultiResults;
 import io.vlingo.symbio.store.object.ObjectStoreReader.QueryResultInterest;
 import io.vlingo.symbio.store.object.ObjectStoreReader.QuerySingleResult;
-import io.vlingo.symbio.store.object.PersistentEntry;
-import io.vlingo.symbio.store.object.QueryExpression;
-import io.vlingo.symbio.store.object.StateObjectMapper;
-import io.vlingo.symbio.store.object.StateSources;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreEntryJournalQueries;
+import org.junit.After;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+
+import static org.junit.Assert.*;
 
 public class JdbiObjectStoreTest {
   private JdbiOnDatabase jdbi;
   private ObjectStore objectStore;
   private World world;
   private MockDispatcher<BaseEntry.TextEntry, State.TextState> dispatcher;
+  private DbBootstrap dbBootstrap;
+  private Configuration configuration;
+  private Connection connection;
 
   @Test
   public void testThatObjectStoreConnects() {
@@ -321,10 +312,12 @@ public class JdbiObjectStoreTest {
 
   @Before
   public void setUp() throws Exception {
-    final Configuration configuration = HSQLDBConfigurationProvider.testConfiguration(DataFormat.Native);
-
+    dbBootstrap = new HSQLBootstrapProvider().getBootstrap(DataFormat.Text);
+    configuration = dbBootstrap.createRandomDatabase();
+    ConnectionProvider connectionProvider = new ConnectionProvider(configuration);
+    connection = connectionProvider.connection();
     jdbi = JdbiOnHSQLDB.openUsing(configuration);
-
+    jdbi.provisionConnection(connection);
     jdbi.handle().execute("DROP SCHEMA PUBLIC CASCADE");
     jdbi.handle().execute("CREATE TABLE PERSON (id BIGINT PRIMARY KEY, name VARCHAR(200), age INTEGER)");
 
@@ -344,12 +337,18 @@ public class JdbiObjectStoreTest {
                             (update,object) -> update.bindFields(object)),
                     new PersonMapper());
 
-    objectStore = jdbi.objectStore(world, dispatcher, Collections.singletonList(personMapper));
+    objectStore = jdbi.objectStore(world, dispatcher, Collections.singletonList(personMapper), connectionProvider);
   }
 
   @After
   public void tearDown() {
     objectStore.close();
+    try {
+      connection.close();
+    } catch (SQLException ignored) {
+    }
+    dbBootstrap.dropDatabase(configuration.databaseName);
+    dbBootstrap.stopService();
   }
 
   private static class TestQueryResultInterest implements QueryResultInterest {

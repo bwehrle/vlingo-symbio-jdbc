@@ -7,21 +7,6 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-import java.util.Random;
-
-import io.vlingo.symbio.store.object.StateSources;
-import org.jdbi.v3.core.statement.SqlStatement;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-
 import io.vlingo.actors.World;
 import io.vlingo.actors.testkit.AccessSafely;
 import io.vlingo.common.Outcome;
@@ -32,9 +17,27 @@ import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.EntryReader;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.StorageException;
+import io.vlingo.symbio.store.common.DbBootstrap;
 import io.vlingo.symbio.store.common.MockDispatcher;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.object.ObjectStore;
 import io.vlingo.symbio.store.object.StateObjectMapper;
+import io.vlingo.symbio.store.object.StateSources;
+import org.jdbi.v3.core.statement.SqlStatement;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Random;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 
 public abstract class JdbiObjectStoreEntryReaderTest {
   protected MockDispatcher<BaseEntry.TextEntry, State.TextState> dispatcher;
@@ -42,6 +45,7 @@ public abstract class JdbiObjectStoreEntryReaderTest {
   protected JdbiOnDatabase jdbi;
   protected ObjectStore objectStore;
   protected World world;
+  private Connection connection;
 
   @Test
   public void testThatEntryReaderReadsOne() {
@@ -128,7 +132,11 @@ public abstract class JdbiObjectStoreEntryReaderTest {
 
   @Before
   public void setUp() throws Exception {
-    jdbi = jdbiOnDatabase();
+    DbBootstrap dbBootstrap = createDbBootstrap();
+    Configuration configuration = dbBootstrap.createRandomDatabase();
+    ConnectionProvider connectionProvider = new ConnectionProvider(configuration);
+    connection = connectionProvider.connection();
+    jdbi = jdbiOnDatabase(configuration, connection);
     jdbi.createCommonTables();
     jdbi.handle().execute("CREATE TABLE PERSON (id BIGINT PRIMARY KEY, name VARCHAR(200), age INTEGER)");
 
@@ -145,16 +153,22 @@ public abstract class JdbiObjectStoreEntryReaderTest {
                             SqlStatement::bindFields),
                     new PersonMapper());
 
-    objectStore = jdbi.objectStore(world, dispatcher, Collections.singletonList(personMapper));
-
+    objectStore = jdbi.objectStore(world,
+                                  dispatcher,
+                                  Collections.singletonList(personMapper),
+                                  connectionProvider);
     entryReader = objectStore.entryReader("jdbi-entry-reader").await();
   }
 
+  protected abstract DbBootstrap createDbBootstrap();
+
   @After
-  public void tearDown() {
+  public void tearDown() throws SQLException {
     objectStore.close();
+    connection.close();
     world.terminate();
   }
 
-  protected abstract JdbiOnDatabase jdbiOnDatabase() throws Exception;
+  protected abstract JdbiOnDatabase jdbiOnDatabase(final Configuration configuration,
+                                                   final Connection connection) throws Exception;
 }

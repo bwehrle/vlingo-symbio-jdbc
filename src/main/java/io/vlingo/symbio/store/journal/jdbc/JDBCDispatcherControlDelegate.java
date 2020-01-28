@@ -14,6 +14,7 @@ import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.Metadata;
 import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 import io.vlingo.symbio.store.dispatch.Dispatchable;
 import io.vlingo.symbio.store.dispatch.DispatcherControl;
@@ -31,28 +32,39 @@ import java.util.List;
 
 public class JDBCDispatcherControlDelegate implements DispatcherControl.DispatcherControlDelegate<Entry<String>, State.TextState> {
     static final String DISPATCHEABLE_ENTRIES_DELIMITER = "|";
-
-    private final Connection connection;
+    private final ConnectionProvider connectionProvider;
+    private final String originatorId;
+    private Connection connection;
     private final DatabaseType databaseType;
     private final Logger logger;
-    private final PreparedStatement selectDispatchables;
-    private final JDBCQueries queries;
+    private PreparedStatement selectDispatchables;
+    private JDBCQueries queries;
 
-    public JDBCDispatcherControlDelegate(final Configuration configuration, final Logger logger) throws SQLException {
-        this.connection = configuration.connection;
+    public JDBCDispatcherControlDelegate(final ConnectionProvider connectionProvider, final Configuration configuration, final Logger logger) throws SQLException {
+        this.connectionProvider = connectionProvider;
         this.databaseType = configuration.databaseType;
         this.logger = logger;
-        this.queries = JDBCQueries.queriesFor(configuration.connection);
+        this.originatorId =  configuration.originatorId;
+    }
 
-        queries.createTables();
+    public void reuseOrAcquireConnection() {
+        try {
+            if (connection == null || connection.isClosed()) {
+                connection = connectionProvider.connection();
+                connection.setAutoCommit(false);
+                this.queries = JDBCQueries.queriesFor(connection);
+                this.selectDispatchables = queries.prepareSelectDispatchablesQuery(originatorId);
+            }
+        }catch(SQLException sqlEx) {
+            throw new IllegalStateException(sqlEx.getMessage(), sqlEx);
+        }
 
-        this.selectDispatchables = queries.prepareSelectDispatchablesQuery(configuration.originatorId);
     }
 
     @Override
     public Collection<Dispatchable<Entry<String>, State.TextState>> allUnconfirmedDispatchableStates() throws Exception {
         final List<Dispatchable<Entry<String>, State.TextState>> dispatchables = new ArrayList<>();
-
+        reuseOrAcquireConnection();
         try (final ResultSet result = selectDispatchables.executeQuery()) {
             while (result.next()) {
                 dispatchables.add(dispatchableFrom(result));
@@ -65,6 +77,7 @@ public class JDBCDispatcherControlDelegate implements DispatcherControl.Dispatch
     @Override
     public void confirmDispatched(final String dispatchId) {
         try {
+            reuseOrAcquireConnection();
             queries.prepareDeleteDispatchableQuery(dispatchId).executeUpdate();
             doCommit();
         } catch (final Exception e) {
@@ -77,6 +90,7 @@ public class JDBCDispatcherControlDelegate implements DispatcherControl.Dispatch
     public void stop() {
         try {
             queries.close();
+            connection.close();
         } catch (final SQLException e) {
             //ignore
         }

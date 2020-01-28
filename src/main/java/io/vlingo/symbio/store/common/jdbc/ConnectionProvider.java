@@ -7,35 +7,22 @@
 
 package io.vlingo.symbio.store.common.jdbc;
 
+import org.jdbi.v3.core.statement.SqlStatement;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.util.Properties;
 
 /**
  * Provider of {@code Connection} instances.
  */
 public class ConnectionProvider {
-  public final String databaseName;
-  public final String driverClassname;
-  public final String url;
-  public final String username;
-  public final boolean useSSL;
 
-  final String password;
+  public final Configuration configuration;
 
-  public ConnectionProvider(
-          final String driverClassname,
-          final String url,
-          final String databaseName,
-          final String username,
-          final String password,
-          final boolean useSSL) {
-    this.driverClassname = driverClassname;
-    this.url = url;
-    this.databaseName = databaseName;
-    this.username = username;
-    this.password = password;
-    this.useSSL = useSSL;
+  public ConnectionProvider(Configuration configuration) {
+    this.configuration = configuration;
   }
 
   /**
@@ -43,26 +30,21 @@ public class ConnectionProvider {
    * @return Connection
    */
   public Connection connection() {
+    return openConnection();
+  }
+
+  private Connection openConnection() {
     try {
-      Class.forName(driverClassname);
+      Class.forName(configuration.driverClassname);
       final Properties properties = new Properties();
-      properties.setProperty("user", username);
-      properties.setProperty("password", password);
-      properties.setProperty("ssl", Boolean.toString(useSSL));
-      final Connection connection = DriverManager.getConnection(url + databaseName, properties);
+      properties.setProperty("user", configuration.username);
+      properties.setProperty("password", configuration.password);
+      properties.setProperty("ssl", Boolean.toString(configuration.useSSL));
+      final Connection connection = DriverManager.getConnection(configuration.url + configuration.databaseName, properties);
       connection.setAutoCommit(false);
       return connection;
     }  catch (Exception e) {
       throw new IllegalStateException(getClass().getSimpleName() + ": Cannot connect because database unavailable or wrong credentials.");
     }
-  }
-
-  /**
-   * Answer a copy of me but with the given {@code databaseName}.
-   * @param databaseName the String name of the database with which to create the new ConnectionProvider
-   * @return ConnectionProvider
-   */
-  public ConnectionProvider copyReplacing(final String databaseName) {
-    return new ConnectionProvider(driverClassname, url, databaseName, username, password, useSSL);
   }
 }

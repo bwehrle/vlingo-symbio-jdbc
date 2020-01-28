@@ -7,17 +7,6 @@
 
 package io.vlingo.symbio.store.state.jdbc.hsqldb;
 
-import static org.junit.Assert.assertEquals;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.UUID;
-
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-
 import io.vlingo.actors.Definition;
 import io.vlingo.actors.World;
 import io.vlingo.actors.testkit.AccessSafely;
@@ -29,21 +18,30 @@ import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.TestEvents.Event1;
 import io.vlingo.symbio.store.TestEvents.Event2;
 import io.vlingo.symbio.store.TestEvents.Event3;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
-import io.vlingo.symbio.store.common.jdbc.hsqldb.HSQLDBConfigurationProvider;
-import io.vlingo.symbio.store.state.Entity1;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.HSQLBootstrapProvider;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
+import io.vlingo.symbio.store.state.*;
 import io.vlingo.symbio.store.state.Entity1.Entity1StateAdapter;
-import io.vlingo.symbio.store.state.MockResultInterest;
-import io.vlingo.symbio.store.state.MockTextDispatcher;
-import io.vlingo.symbio.store.state.StateStore;
 import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
-import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
 import io.vlingo.symbio.store.state.jdbc.JDBCStateStoreActor;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.sql.Connection;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
+
+import static org.junit.Assert.assertEquals;
 
 public class HSQLDBJDBCTextStateStoreEntryTest {
   private final String databaseName = UUID.randomUUID().toString();
 
-  private TestConfiguration configuration;
+  private Configuration configuration;
   private StorageDelegate delegate;
   private MockTextDispatcher dispatcher;
   private EntryAdapterProvider entryAdapterProvider;
@@ -51,6 +49,7 @@ public class HSQLDBJDBCTextStateStoreEntryTest {
   private MockResultInterest interest;
   private StateStore store;
   private World world;
+  private Connection connection;
 
   @Test
   public void testThatSourcesAppendAsEntries() {
@@ -97,10 +96,13 @@ public class HSQLDBJDBCTextStateStoreEntryTest {
     entity1StoreName = Entity1.class.getSimpleName();
     StateTypeStateStoreMap.stateTypeToStoreName(Entity1.class, entity1StoreName);
 
-    configuration = testConfiguration(DataFormat.Text);
+    DbBootstrap bootstrap = new HSQLBootstrapProvider().getBootstrap(DataFormat.Text);
+    bootstrap.startService();
+    configuration = bootstrap.createRandomDatabase();
+    connection = new ConnectionProvider(configuration).connection();
+
 
     delegate = new HSQLDBStorageDelegate(configuration, world.defaultLogger());
-
     interest = new MockResultInterest(false);
     dispatcher = new MockTextDispatcher(0, interest);
 
@@ -119,12 +121,8 @@ public class HSQLDBJDBCTextStateStoreEntryTest {
   public void tearDown() throws Exception {
     if (configuration == null) return;
     world.terminate();
-    configuration.cleanUp();
-    delegate.close();
-  }
+    connection.close();
 
-  private TestConfiguration testConfiguration(final DataFormat format) throws Exception {
-    System.out.println("Starting: HSQLDBJDBCTextStateStoreEntryActorTest: testConfiguration(): " + databaseName);
-    return HSQLDBConfigurationProvider.testConfiguration(format, databaseName);
+    delegate.close();
   }
 }

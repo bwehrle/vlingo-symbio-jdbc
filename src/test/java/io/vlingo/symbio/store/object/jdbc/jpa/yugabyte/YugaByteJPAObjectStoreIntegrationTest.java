@@ -10,9 +10,8 @@ package io.vlingo.symbio.store.object.jdbc.jpa.yugabyte;
 import io.vlingo.actors.Logger;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
-import io.vlingo.symbio.store.common.jdbc.yugabyte.YugaByteConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.YugaByteBootstrap;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.YugaByteObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.jpa.JDBCObjectStoreEntryReaderTest;
@@ -25,9 +24,10 @@ import java.util.Map;
 
 @Ignore
 public class YugaByteJPAObjectStoreIntegrationTest extends JDBCObjectStoreEntryReaderTest {
+
     @Override
-    protected Configuration createAdminConfiguration() throws Exception {
-        return YugaByteConfigurationProvider.testConfiguration(DataFormat.Text);
+    protected DbBootstrap createBootstrap() {
+        return new YugaByteBootstrap().getBootstrap(DataFormat.Text);
     }
 
     @Override
@@ -36,23 +36,8 @@ public class YugaByteJPAObjectStoreIntegrationTest extends JDBCObjectStoreEntryR
     }
 
     @Override
-    protected ConnectionProvider createConnectionProvider() {
-        return new ConnectionProvider("org.postgresql.Driver", "jdbc:postgresql://localhost:5433/", testDatabaseName, "postgres", "postgres", false);
-    }
-
-    @Override
     protected JDBCObjectStoreEntryJournalQueries createQueries(Connection connection) {
         return new YugaByteObjectStoreEntryJournalQueries(connection);
-    }
-
-    @Override
-    protected void createTestDatabase() throws Exception {
-        YugaByteConfigurationProvider.interest.createDatabase(adminConfiguration.connection, testDatabaseName);
-    }
-
-    @Override
-    protected void dropTestDatabase() throws Exception {
-        YugaByteConfigurationProvider.interest.dropDatabase(adminConfiguration.connection, testDatabaseName);
     }
 
     @Override

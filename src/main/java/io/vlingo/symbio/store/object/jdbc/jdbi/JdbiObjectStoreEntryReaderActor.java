@@ -7,18 +7,16 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import java.sql.SQLException;
-import java.util.Collection;
-import java.util.List;
-
-import org.jdbi.v3.core.mapper.RowMapper;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.common.Completes;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.store.object.ObjectStoreEntryReader;
 import io.vlingo.symbio.store.object.QueryExpression;
 import io.vlingo.symbio.store.object.StateObjectMapper;
+import org.jdbi.v3.core.mapper.RowMapper;
+
+import java.util.Collection;
+import java.util.List;
 
 /**
  * An {@code ObjectStoreEntryReader} for Jdbi.
@@ -32,7 +30,9 @@ public class JdbiObjectStoreEntryReaderActor extends Actor implements ObjectStor
 
   private long offset;
 
-  public JdbiObjectStoreEntryReaderActor(final JdbiOnDatabase jdbi, final Collection<StateObjectMapper> mappers, final String name) {
+  public JdbiObjectStoreEntryReaderActor(final JdbiOnDatabase jdbi,
+                                         final Collection<StateObjectMapper> mappers,
+                                         final String name) {
     this.jdbi = jdbi;
     this.name = name;
     this.offset = 1L;
@@ -47,13 +47,6 @@ public class JdbiObjectStoreEntryReaderActor extends Actor implements ObjectStor
 
   @Override
   public void close() {
-    try {
-      if (!jdbi.configuration().connection.isClosed()) {
-        jdbi.configuration().connection.close();
-      }
-    } catch (SQLException e) {
-      // ignore
-    }
   }
 
   @Override

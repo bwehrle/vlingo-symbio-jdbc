@@ -7,13 +7,8 @@
 
 package io.vlingo.symbio.store.state.jdbc.hsqldb;
 
-import java.sql.Blob;
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.text.MessageFormat;
-
 import io.vlingo.actors.Logger;
+import io.vlingo.common.Tuple2;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.DataFormat;
@@ -24,13 +19,18 @@ import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
 import io.vlingo.symbio.store.state.jdbc.JDBCDispatchableCachedStatements;
 import io.vlingo.symbio.store.state.jdbc.JDBCStorageDelegate;
 
+import java.sql.Blob;
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.MessageFormat;
+
 public class HSQLDBStorageDelegate extends JDBCStorageDelegate<Blob> implements StorageDelegate, HSQLDBQueries {
   private final Configuration configuration;
 
   public HSQLDBStorageDelegate(final Configuration configuration, final Logger logger) {
 
-    super(configuration.connection,
-          configuration.format,
+    super(configuration.format,
           configuration.originatorId,
           configuration.createTables,
           logger);
@@ -53,7 +53,7 @@ public class HSQLDBStorageDelegate extends JDBCStorageDelegate<Blob> implements 
   public EntryReader.Advice entryReaderAdvice() {
     try {
       return new EntryReader.Advice(
-              Configuration.cloneOf(configuration),
+              Tuple2.from(Configuration.cloneOf(configuration), connection),
               HSQLDBStateStoreEntryReaderActor.class,
               namedEntry(SQL_QUERY_ENTRY_BATCH),
               namedEntry(SQL_QUERY_ENTRY),

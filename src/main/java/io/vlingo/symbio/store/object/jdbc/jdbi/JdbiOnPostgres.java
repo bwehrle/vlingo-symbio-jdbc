@@ -7,12 +7,11 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import java.text.MessageFormat;
-import java.util.function.BiFunction;
-
+import io.vlingo.symbio.store.common.jdbc.Configuration;
 import org.jdbi.v3.core.statement.Update;
 
-import io.vlingo.symbio.store.common.jdbc.Configuration;
+import java.text.MessageFormat;
+import java.util.function.BiFunction;
 
 /**
  * A {@code JdbiOnDatabase} for PostgreSQL.
@@ -28,7 +27,7 @@ public class JdbiOnPostgres extends JdbiOnDatabase {
   }
 
   /*
-   * @see io.vlingo.symbio.store.object.jdbc.jdbi.JdbiOnDatabase#currentEntryOffsetMapper(java.lang.String[])
+   * @see io.vlingo.symbio.store.objexct.jdbc.jdbi.JdbiOnDatabase#currentEntryOffsetMapper(java.lang.String[])
    */
   @Override
   public JdbiPersistMapper currentEntryOffsetMapper(final String[] placeholders) {

@@ -10,9 +10,8 @@ package io.vlingo.symbio.store.object.jdbc.jpa.mysql;
 import io.vlingo.actors.Logger;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
-import io.vlingo.symbio.store.common.jdbc.mysql.MySQLConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.MySqlBootstrap;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.MySQLObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.jpa.JDBCObjectStoreEntryReaderTest;
@@ -23,9 +22,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class MySQLJPAObjectStoreIntegrationTest extends JDBCObjectStoreEntryReaderTest {
+
     @Override
-    protected Configuration createAdminConfiguration() throws Exception {
-        return MySQLConfigurationProvider.testConfiguration(DataFormat.Text);
+    protected DbBootstrap createBootstrap() {
+        return new MySqlBootstrap().getBootstrap(DataFormat.Text);
     }
 
     @Override
@@ -34,24 +34,8 @@ public class MySQLJPAObjectStoreIntegrationTest extends JDBCObjectStoreEntryRead
     }
 
     @Override
-    protected ConnectionProvider createConnectionProvider() {
-        return new ConnectionProvider("com.mysql.cj.jdbc.Driver", "jdbc:mysql://localhost/", testDatabaseName,
-                "vlingo_test", "vlingo123", false);
-    }
-
-    @Override
     protected JDBCObjectStoreEntryJournalQueries createQueries(Connection connection) {
         return new MySQLObjectStoreEntryJournalQueries(connection);
-    }
-
-    @Override
-    protected void createTestDatabase() throws Exception {
-        MySQLConfigurationProvider.interest.createDatabase(adminConfiguration.connection, testDatabaseName);
-    }
-
-    @Override
-    protected void dropTestDatabase() throws Exception {
-        MySQLConfigurationProvider.interest.dropDatabase(adminConfiguration.connection, testDatabaseName);
     }
 
     @Override

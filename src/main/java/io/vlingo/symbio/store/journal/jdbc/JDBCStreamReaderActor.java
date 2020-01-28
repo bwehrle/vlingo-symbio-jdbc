@@ -7,7 +7,15 @@
 
 package io.vlingo.symbio.store.journal.jdbc;
 
-import static java.util.Collections.emptyList;
+import com.google.gson.Gson;
+import io.vlingo.actors.Actor;
+import io.vlingo.common.Completes;
+import io.vlingo.symbio.BaseEntry;
+import io.vlingo.symbio.Metadata;
+import io.vlingo.symbio.State;
+import io.vlingo.symbio.State.TextState;
+import io.vlingo.symbio.store.journal.Stream;
+import io.vlingo.symbio.store.journal.StreamReader;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -15,26 +23,15 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
-import com.google.gson.Gson;
-
-import io.vlingo.actors.Actor;
-import io.vlingo.common.Completes;
-import io.vlingo.symbio.BaseEntry;
-import io.vlingo.symbio.Metadata;
-import io.vlingo.symbio.State;
-import io.vlingo.symbio.State.TextState;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.journal.Stream;
-import io.vlingo.symbio.store.journal.StreamReader;
-import io.vlingo.symbio.store.journal.jdbc.JDBCQueries;
+import static java.util.Collections.emptyList;
 
 public class JDBCStreamReaderActor extends Actor implements StreamReader<String> {
     private final Connection connection;
     private final Gson gson;
     private final JDBCQueries queries;
 
-    public JDBCStreamReaderActor(final Configuration configuration) throws SQLException {
-        this.connection = configuration.connection;
+    public JDBCStreamReaderActor(final Connection connection) throws SQLException {
+        this.connection = connection;
         this.queries = JDBCQueries.queriesFor(this.connection);
         this.gson = new Gson();
     }

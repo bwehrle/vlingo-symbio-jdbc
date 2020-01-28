@@ -8,6 +8,7 @@
 package io.vlingo.symbio.store.state.jdbc.mysql;
 
 import io.vlingo.actors.Logger;
+import io.vlingo.common.Tuple2;
 import io.vlingo.symbio.Entry;
 import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.DataFormat;
@@ -15,9 +16,9 @@ import io.vlingo.symbio.store.EntryReader;
 import io.vlingo.symbio.store.common.jdbc.CachedStatement;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.state.StateStore;
+import io.vlingo.symbio.store.state.jdbc.DbStateStoreEntryReaderActor;
 import io.vlingo.symbio.store.state.jdbc.JDBCDispatchableCachedStatements;
 import io.vlingo.symbio.store.state.jdbc.JDBCStorageDelegate;
-import io.vlingo.symbio.store.state.jdbc.DbStateStoreEntryReaderActor;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -26,10 +27,9 @@ import java.text.MessageFormat;
 public class MySQLStorageDelegate extends JDBCStorageDelegate<Object> implements StateStore.StorageDelegate, MySQLQueries{
     private final Configuration configuration;
 
-    public MySQLStorageDelegate(final Configuration configuration, final Logger logger) {
+    public MySQLStorageDelegate(final Connection connection, final Configuration configuration, final Logger logger) {
 
-        super(configuration.connection,
-                configuration.format,
+        super(  configuration.format,
                 configuration.originatorId,
                 configuration.createTables,
                 logger);
@@ -40,7 +40,7 @@ public class MySQLStorageDelegate extends JDBCStorageDelegate<Object> implements
     @Override
     public StateStore.StorageDelegate copy() {
         try {
-            return new MySQLStorageDelegate(Configuration.cloneOf(configuration), logger);
+            return new MySQLStorageDelegate(connection, Configuration.cloneOf(configuration), logger);
         } catch (Exception e) {
             final String message = "Copy of MySQLStorageDelegate failed because: " + e.getMessage();
             logger.error(message, e);
@@ -51,8 +51,9 @@ public class MySQLStorageDelegate extends JDBCStorageDelegate<Object> implements
     @Override
     public EntryReader.Advice entryReaderAdvice() {
         try {
+            Tuple2<Connection, Configuration> readerConfiguration = Tuple2.from(connection, configuration);
             return new EntryReader.Advice(
-                    Configuration.cloneOf(configuration),
+                    readerConfiguration,
                     DbStateStoreEntryReaderActor.class,
                     namedEntry(SQL_QUERY_ENTRY_BATCH),
                     namedEntry(SQL_QUERY_ENTRY),

@@ -7,7 +7,6 @@
 
 package io.vlingo.symbio.store.state.jdbc;
 
-import java.io.Closeable;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -16,7 +15,7 @@ import io.vlingo.actors.Logger;
 import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.common.jdbc.CachedStatement;
 
-public abstract class JDBCDispatchableCachedStatements<T> implements Closeable {
+public abstract class JDBCDispatchableCachedStatements<T>  {
   private  CachedStatement<T> appendDispatchable;
   private  CachedStatement<T> queryEntry;
   private  CachedStatement<T> appendEntry;
@@ -27,8 +26,7 @@ public abstract class JDBCDispatchableCachedStatements<T> implements Closeable {
   private final String originatorId;
   private final T appendDataObject;
   private final Logger logger;
-  private Connection lastConnection;
-  
+
   protected JDBCDispatchableCachedStatements(
           final String originatorId,
           final Connection connection,
@@ -39,26 +37,20 @@ public abstract class JDBCDispatchableCachedStatements<T> implements Closeable {
     this.originatorId = originatorId;
     this.appendDataObject = appendDataObject;
     this.logger = logger;
-    this.lastConnection = null;
 
     createStatementsOnNewConnection(connection);
   }
 
   private void createStatementsOnNewConnection(Connection connection) {
-    if (!connection.equals(lastConnection)) {
-      close();
       this.queryEntry = createStatement(queryEntryExpression(), appendDataObject, connection, logger);
       this.appendEntry = createStatement(appendEntryExpression(), appendDataObject, connection, logger);
       this.appendEntryIdentity = createStatement(appendEntryIdentityExpression(), null, connection, logger);
       this.appendDispatchable = createStatement(appendDispatchableExpression(), appendDataObject, connection, logger);
       this.deleteDispatchable = createStatement(deleteDispatchableExpression(), null, connection, logger);
       this.queryAllDispatchables = prepareQuery(createStatement(selectDispatchableExpression(), null, connection, logger), originatorId, logger);
-      lastConnection = connection;
-    }
   }
 
-  @Override
-  public void close() {
+  public void closeAll() {
     closeStatement(queryEntry);
     closeStatement(appendEntry);
     closeStatement(appendEntryIdentity);
@@ -73,34 +65,29 @@ public abstract class JDBCDispatchableCachedStatements<T> implements Closeable {
       }
   }
 
-  public final CachedStatement<T> appendDispatchableStatement(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public final CachedStatement<T> appendDispatchableStatement() {
     return cleanPreparedStatement(appendDispatchable);
   }
 
-  public final CachedStatement<T> appendEntryStatement(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public final CachedStatement<T> appendEntryStatement() {
     return cleanPreparedStatement(appendEntry);
   }
 
-  public final CachedStatement<T> appendEntryIdentityStatement(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public final CachedStatement<T> appendEntryIdentityStatement() {
     return cleanPreparedStatement(appendEntryIdentity);
   }
 
-  public final CachedStatement<T> deleteStatement(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public final CachedStatement<T> deleteStatement() {
     return cleanPreparedStatement(deleteDispatchable);
   }
 
-  public final CachedStatement<T> queryAllStatement(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public final CachedStatement<T> queryAllStatement() {
     return cleanPreparedStatement(queryAllDispatchables);
   }
   
-  public CachedStatement<T> getQueryEntry(final Connection connection) {
-    createStatementsOnNewConnection(connection);
+  public CachedStatement<T> getQueryEntry() {
     return cleanPreparedStatement(queryEntry);
+
   }
 
   protected abstract String appendEntryExpression();

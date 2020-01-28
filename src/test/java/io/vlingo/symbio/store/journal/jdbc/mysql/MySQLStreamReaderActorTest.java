@@ -8,13 +8,14 @@
 package io.vlingo.symbio.store.journal.jdbc.mysql;
 
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.common.jdbc.mysql.MySQLConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.MySqlBootstrap;
 import io.vlingo.symbio.store.journal.jdbc.JDBCStreamReaderActorTest;
 
 public class MySQLStreamReaderActorTest extends JDBCStreamReaderActorTest {
+
     @Override
-    protected Configuration.TestConfiguration testConfiguration(DataFormat format) throws Exception {
-        return MySQLConfigurationProvider.testConfiguration(format);
+    protected DbBootstrap getBootStrap() {
+        return new MySqlBootstrap().getBootstrap(DataFormat.Text);
     }
 }

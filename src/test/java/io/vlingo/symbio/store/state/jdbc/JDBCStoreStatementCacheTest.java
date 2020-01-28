@@ -9,7 +9,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 import static org.junit.Assert.*;
 
@@ -30,7 +30,7 @@ public class JDBCStoreStatementCacheTest {
     @Test
     public void cache_statements_for_same_connection() {
 
-        final Supplier<CachedStatement<String>> supplier = () -> new CachedStatement<>(mockPreparedStatement, null);
+        final Function<Connection, CachedStatement<String>> supplier = (conn) -> new CachedStatement<>(mockPreparedStatement, null);
         final CachedStatement<String> statement1 = cache.getOrCreateStatement(TEST_ID, mockConnection, supplier);
         final CachedStatement<String> statement2 = cache.getOrCreateStatement(TEST_ID, mockConnection, supplier);
 
@@ -41,8 +41,10 @@ public class JDBCStoreStatementCacheTest {
     public void invoke_new_statement_after_connection_change() {
         final Connection mockConnectionChanged = createConnection();
 
-        final Supplier<CachedStatement<String>> supplier = () -> new CachedStatement<>(mockPreparedStatement, null);
+        final Function<Connection, CachedStatement<String>> supplier = (conn) ->
+                new CachedStatement<>(mockPreparedStatement, null);
         final CachedStatement<String> statement1 = cache.getOrCreateStatement(TEST_ID, mockConnection, supplier);
+        cache.closeAndRemoveAll();
         final CachedStatement<String> statement2 = cache.getOrCreateStatement(TEST_ID, mockConnectionChanged, supplier);
 
         assertNotSame(statement1, statement2);

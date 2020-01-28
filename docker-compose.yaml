@@ -1,5 +1,7 @@
 version: '3.1'
-
+# This file contains the container definitions for the tests.
+# The database names and passwords are hard-coded into the test code and therefore should only be used
+# with this test suite.  Any change to the database and credentials should be updated manually.
 services:
   postgres:
     image: postgres:latest

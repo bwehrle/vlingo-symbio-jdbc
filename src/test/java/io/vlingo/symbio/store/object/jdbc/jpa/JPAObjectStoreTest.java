@@ -16,6 +16,7 @@ import io.vlingo.symbio.State;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.StorageException;
+import io.vlingo.symbio.store.common.DbBootstrap;
 import io.vlingo.symbio.store.common.MockDispatcher;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
@@ -46,8 +47,10 @@ public abstract class JPAObjectStoreTest {
     protected JDBCObjectStoreEntryJournalQueries queries;
     protected String testDatabaseName;
     protected World world;
+    protected DbBootstrap dbBootstrap;
 
     private static final AtomicInteger databaseNamePostfix = new AtomicInteger(Short.MAX_VALUE);
+    private Connection connection;
 
     /**
      * @throws java.lang.Exception
@@ -59,24 +62,19 @@ public abstract class JPAObjectStoreTest {
         EntryAdapterProvider.instance(world).registerAdapter(PersonRenamed.class, new PersonRenamedAdapter());
         final StateAdapterProvider stateAdapterProvider = StateAdapterProvider.instance(world);
         dispatcher = new MockDispatcher<>();
-        adminConfiguration = createAdminConfiguration();
-
-        testDatabaseName = testDatabaseName();
-        dropTestDatabase();
-        createTestDatabase();
         final Map<String,Object> properties = testDatabaseProperties(testDatabaseName);
 
         // delegate = new JPAObjectStoreDelegate(JPAObjectStoreDelegate.JPA_HSQLDB_PERSISTENCE_UNIT, "TEST", stateAdapterProvider, world.defaultLogger());
         delegate = createDelegate(properties, "TEST", stateAdapterProvider, world.defaultLogger());
+        dbBootstrap = createBootstrap();
+        adminConfiguration = dbBootstrap.createRandomDatabase();
+        connection = new ConnectionProvider(adminConfiguration).connection();
 
-        // connectionProvider = new ConnectionProvider("org.hsqldb.jdbc.JDBCDriver", "jdbc:hsqldb:mem", "test", "SA", "", false);
-        connectionProvider = createConnectionProvider();
-
-        // queries = new HSQLDBObjectStoreEntryJournalQueries(connectionProvider.connection());
-        queries = createQueries(connectionProvider.connection());
-
+        queries = createQueries(connection);
         objectStore = world.actorFor(JPAObjectStore.class, JPAObjectStoreActor.class, delegate, connectionProvider, dispatcher);
     }
+
+    protected abstract DbBootstrap createBootstrap();
 
     /**
      * @throws java.lang.Exception
@@ -85,7 +83,8 @@ public abstract class JPAObjectStoreTest {
     public void tearDown() throws Exception {
         objectStore.close();
         world.terminate();
-        dropTestDatabase();
+        connection.close();
+        dbBootstrap.dropDatabase(adminConfiguration.databaseName);
     }
 
     protected String testDatabaseName() {
@@ -177,18 +176,11 @@ public abstract class JPAObjectStoreTest {
         }
     }
 
-    protected abstract Configuration createAdminConfiguration() throws Exception;
-
     protected abstract JPAObjectStoreDelegate createDelegate(final Map<String,Object> properties, final String originatorId,
                                                              final StateAdapterProvider stateAdapterProvider, final Logger logger);
 
-    protected abstract ConnectionProvider createConnectionProvider();
 
     protected abstract JDBCObjectStoreEntryJournalQueries createQueries(Connection connection);
-
-    protected abstract void createTestDatabase() throws Exception;
-
-    protected abstract void dropTestDatabase() throws Exception;
 
     protected abstract Map<String, Object> getDatabaseSpecificProperties(String databaseNamePostfix);
 }

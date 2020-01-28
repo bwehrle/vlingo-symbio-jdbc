@@ -10,6 +10,7 @@ package io.vlingo.symbio.store.object.jdbc.jdbi;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import org.jdbi.v3.core.statement.Update;
 
+import java.sql.Connection;
 import java.text.MessageFormat;
 import java.util.function.BiFunction;
 
@@ -19,8 +20,8 @@ public class JdbiOnMySQL extends JdbiOnDatabase {
      * @param configuration the Configuration which include the Connection
      * @return JdbiOnMySQL
      */
-    public static JdbiOnMySQL openUsing(final Configuration configuration) {
-        return new JdbiOnMySQL(configuration);
+    public static JdbiOnMySQL openUsing(final Configuration configuration, final Connection connection) {
+        return new JdbiOnMySQL(configuration, connection);
     }
 
     /*
@@ -38,7 +39,7 @@ public class JdbiOnMySQL extends JdbiOnDatabase {
                 (BiFunction<Update,Object,Update>[]) null);
     }
 
-    private JdbiOnMySQL(final Configuration configuration) {
+    private JdbiOnMySQL(final Configuration configuration, final Connection connection) {
         super(configuration);
     }
 }

@@ -7,16 +7,6 @@
 
 package io.vlingo.symbio.store.state.jdbc;
 
-import static org.junit.Assert.assertEquals;
-
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
-
 import io.vlingo.actors.Definition;
 import io.vlingo.actors.Logger;
 import io.vlingo.actors.World;
@@ -27,15 +17,23 @@ import io.vlingo.symbio.EntryAdapterProvider;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.DataFormat;
 import io.vlingo.symbio.store.TestEvents;
+import io.vlingo.symbio.store.common.DbBootstrap;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.state.Entity1;
-import io.vlingo.symbio.store.state.MockResultInterest;
-import io.vlingo.symbio.store.state.MockTextDispatcher;
-import io.vlingo.symbio.store.state.StateStore;
-import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
+import io.vlingo.symbio.store.state.*;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
+
+import java.sql.Connection;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
 
 public abstract class JDBCTextStateStoreEntryTest {
-    private Configuration.TestConfiguration configuration;
+    private Configuration configuration;
     private StateStore.StorageDelegate delegate;
     private MockTextDispatcher dispatcher;
     private EntryAdapterProvider entryAdapterProvider;
@@ -43,6 +41,8 @@ public abstract class JDBCTextStateStoreEntryTest {
     private MockResultInterest interest;
     private StateStore store;
     private World world;
+    protected Connection connection;
+    private DbBootstrap dbBootstrap;
 
     @Test
     public void testThatSourcesAppendAsEntries() {
@@ -87,8 +87,10 @@ public abstract class JDBCTextStateStoreEntryTest {
         entity1StoreName = Entity1.class.getSimpleName();
         StateTypeStateStoreMap.stateTypeToStoreName(Entity1.class, entity1StoreName);
 
-        configuration = testConfiguration(DataFormat.Text);
-        delegate = storageDelegate(configuration, world.defaultLogger());
+        dbBootstrap = getBootstrap(DataFormat.Text);
+        final Configuration testDbConfiguration = dbBootstrap.createRandomDatabase();
+        connection = new ConnectionProvider(testDbConfiguration).connection();
+        delegate = storageDelegate(connection, testDbConfiguration, world.defaultLogger());
         interest = new MockResultInterest(false);
         dispatcher = new MockTextDispatcher(0, interest);
 
@@ -108,7 +110,9 @@ public abstract class JDBCTextStateStoreEntryTest {
         if (configuration == null) return;
         world.terminate();
         delegate.close();
-        configuration.cleanUp();
+        connection.close();
+        dbBootstrap.dropDatabase(configuration.databaseName);
+        dbBootstrap.stopService();
     }
 
     /**
@@ -117,7 +121,9 @@ public abstract class JDBCTextStateStoreEntryTest {
      * @param logger
      * @return
      */
-    protected abstract StateStore.StorageDelegate storageDelegate(Configuration.TestConfiguration configuration, final Logger logger);
+    protected abstract StateStore.StorageDelegate storageDelegate(final Connection connection,
+                                                                  final Configuration configuration,
+                                                                  final Logger logger);
 
     /**
      * Create specific test configuration.
@@ -125,5 +131,5 @@ public abstract class JDBCTextStateStoreEntryTest {
      * @return
      * @throws Exception
      */
-    protected abstract Configuration.TestConfiguration testConfiguration(final DataFormat format) throws Exception;
+    protected abstract DbBootstrap getBootstrap(DataFormat dataFormat);
 }

@@ -10,9 +10,8 @@ package io.vlingo.symbio.store.object.jdbc.jpa.postgres;
 import io.vlingo.actors.Logger;
 import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
-import io.vlingo.symbio.store.common.jdbc.postgres.PostgresConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.PostgresBootstrap;
 import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.PostgresObjectStoreEntryJournalQueries;
 import io.vlingo.symbio.store.object.jdbc.jpa.JDBCObjectStoreEntryReaderTest;
@@ -23,9 +22,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class PostgresJDBCObjectStoreEntryReaderTest extends JDBCObjectStoreEntryReaderTest {
+
     @Override
-    protected Configuration createAdminConfiguration() throws Exception {
-        return PostgresConfigurationProvider.testConfiguration(DataFormat.Text);
+    protected DbBootstrap createBootstrap() {
+        return new PostgresBootstrap().getBootstrap(DataFormat.Text);
     }
 
     @Override
@@ -36,24 +36,8 @@ public class PostgresJDBCObjectStoreEntryReaderTest extends JDBCObjectStoreEntry
     }
 
     @Override
-    protected ConnectionProvider createConnectionProvider() {
-        return new ConnectionProvider("org.postgresql.Driver", "jdbc:postgresql://localhost/", testDatabaseName,
-                "vlingo_test", "vlingo123", false);
-    }
-
-    @Override
     protected JDBCObjectStoreEntryJournalQueries createQueries(Connection connection) {
         return new PostgresObjectStoreEntryJournalQueries(connection);
-    }
-
-    @Override
-    protected void createTestDatabase() throws Exception {
-        PostgresConfigurationProvider.interest.createDatabase(adminConfiguration.connection, testDatabaseName);
-    }
-
-    @Override
-    protected void dropTestDatabase() throws Exception {
-        PostgresConfigurationProvider.interest.dropDatabase(adminConfiguration.connection, testDatabaseName);
     }
 
     @Override

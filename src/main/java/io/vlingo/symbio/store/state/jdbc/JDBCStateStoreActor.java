@@ -7,6 +7,25 @@
 
 package io.vlingo.symbio.store.state.jdbc;
 
+import io.vlingo.actors.Actor;
+import io.vlingo.actors.Definition;
+import io.vlingo.common.Completes;
+import io.vlingo.common.Failure;
+import io.vlingo.common.Success;
+import io.vlingo.symbio.*;
+import io.vlingo.symbio.State.TextState;
+import io.vlingo.symbio.store.EntryReader;
+import io.vlingo.symbio.store.Result;
+import io.vlingo.symbio.store.StorageException;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
+import io.vlingo.symbio.store.dispatch.Dispatchable;
+import io.vlingo.symbio.store.dispatch.Dispatcher;
+import io.vlingo.symbio.store.dispatch.DispatcherControl;
+import io.vlingo.symbio.store.dispatch.control.DispatcherControlActor;
+import io.vlingo.symbio.store.state.StateStore;
+import io.vlingo.symbio.store.state.StateStoreEntryReader;
+import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
+
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,30 +36,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import io.vlingo.actors.Actor;
-import io.vlingo.actors.Definition;
-import io.vlingo.common.Completes;
-import io.vlingo.common.Failure;
-import io.vlingo.common.Success;
-import io.vlingo.symbio.BaseEntry;
-import io.vlingo.symbio.Entry;
-import io.vlingo.symbio.EntryAdapterProvider;
-import io.vlingo.symbio.Metadata;
-import io.vlingo.symbio.Source;
-import io.vlingo.symbio.State;
-import io.vlingo.symbio.State.TextState;
-import io.vlingo.symbio.StateAdapterProvider;
-import io.vlingo.symbio.store.EntryReader;
-import io.vlingo.symbio.store.Result;
-import io.vlingo.symbio.store.StorageException;
-import io.vlingo.symbio.store.dispatch.Dispatchable;
-import io.vlingo.symbio.store.dispatch.Dispatcher;
-import io.vlingo.symbio.store.dispatch.DispatcherControl;
-import io.vlingo.symbio.store.dispatch.control.DispatcherControlActor;
-import io.vlingo.symbio.store.state.StateStore;
-import io.vlingo.symbio.store.state.StateStoreEntryReader;
-import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
-
 public class JDBCStateStoreActor extends Actor implements StateStore {
 
   private final JDBCStorageDelegate<TextState> delegate;
@@ -49,21 +44,28 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
   private final Map<String,StateStoreEntryReader<?>> entryReaders;
   private final EntryAdapterProvider entryAdapterProvider;
   private final StateAdapterProvider stateAdapterProvider;
+  private final ConnectionProvider connectionProvider;
+  private Connection connection;
 
-  public JDBCStateStoreActor(final JDBCStorageDelegate<TextState> delegate) {
-    this(null, delegate, 0L, 0L);
-  }
-
-  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher,
-                             final JDBCStorageDelegate<TextState> delegate) {
-    this(dispatcher, delegate, 1000L, 1000L);
+  //todo: potential bug: magic number constants are different
+  public JDBCStateStoreActor(final JDBCStorageDelegate<TextState> delegate,
+                             final ConnectionProvider connectionProvider) {
+    this(null, delegate, connectionProvider, 0L, 0L);
   }
 
   public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher,
                              final JDBCStorageDelegate<TextState> delegate,
+                             final ConnectionProvider connectionProvider) {
+    this(dispatcher, delegate, connectionProvider, 1000L, 1000L);
+  }
+
+  public JDBCStateStoreActor(final Dispatcher<Dispatchable<Entry<?>, State<String>>> dispatcher,
+                             final JDBCStorageDelegate<TextState> delegate,
+                             final ConnectionProvider connectionProvider,
                              final long checkConfirmationExpirationInterval,
                              final long confirmationExpiration) {
     this.delegate = delegate;
+    this.connectionProvider  = connectionProvider;
     this.entryReaders = new HashMap<>();
     this.entryAdapterProvider = EntryAdapterProvider.instance(stage().world());
     this.stateAdapterProvider = StateAdapterProvider.instance(stage().world());
@@ -152,13 +154,14 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
   }
 
   @Override
-  public <S,C> void write(final String id, final S state, final int stateVersion, final List<Source<C>> sources, final Metadata metadata,
-          final WriteResultInterest interest, final Object object) {
+  public <S,C> void write(final String id, final S state, final int stateVersion, final List<Source<C>> sources,
+                          final Metadata metadata, final WriteResultInterest interest, final Object object) {
     if (interest != null) {
       if (state == null) {
         interest.writeResultedIn(Failure.of(new StorageException(Result.Error, "The state is null.")), id,null, stateVersion, sources, object);
       } else {
         try {
+          provisionConnection();
           final String storeName = StateTypeStateStoreMap.storeNameFrom(state.getClass());
 
           if (storeName == null) {
@@ -202,15 +205,12 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
   @SuppressWarnings("rawtypes")
   private <C> List<Entry<?>> appendEntries(final List<Source<C>> sources, final int stateVersion, final Metadata metadata) {
     if (sources.isEmpty()) return Collections.emptyList();
-    Connection connection = null;
 
     try {
-      connection = createOrReuse(delegate.connection);
-      // final Delegate delegate = getOrCreateDelegate(connection)
       final List<Entry<?>> adapted = entryAdapterProvider.asEntries(sources, stateVersion, metadata);
       for (final Entry<?> entry : adapted) {
         long id = -1L;
-        final PreparedStatement appendStatement = delegate.appendExpressionFor(entry, connection);
+        final PreparedStatement appendStatement = delegate.appendExpressionFor(entry);
         final int count = appendStatement.executeUpdate();
         if (count == 1) {
           final PreparedStatement queryLastIdentityStatement = delegate.appendIdentityExpression();
@@ -231,12 +231,12 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
     } catch (final Exception e) {
       final String message = "Failed to append entry because: " + e.getMessage();
       logger().error(message, e);
-      closeConnection(connection);
+      closeConnection();
       throw new IllegalStateException(message, e);
     }
   }
 
-  private void closeConnection(Connection connection) {
+  private void closeConnection() {
     try {
       if (connection != null) {
         connection.close();
@@ -244,14 +244,13 @@ public class JDBCStateStoreActor extends Actor implements StateStore {
     } catch (SQLException ignored) {}
   }
 
-  /// Move this off to a ConnectionProvider/DataSource actor for isolation from the actor concern
-  private Connection createOrReuse(final Connection connection) {
+  private void provisionConnection() {
     try {
       if (connection == null || connection.isClosed()) {
         // Use connectionProvider here to get a new connection, yo!
-        return delegate.connection();
+        connection = connectionProvider.connection();
+        delegate.provisionConnection(connection);
       }
-      return connection;
     } catch (SQLException sqlEx) {
       throw new IllegalStateException(sqlEx.getMessage(), sqlEx);
     }

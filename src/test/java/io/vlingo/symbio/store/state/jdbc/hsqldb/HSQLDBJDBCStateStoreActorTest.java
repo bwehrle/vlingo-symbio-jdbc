@@ -7,11 +7,9 @@
 
 package io.vlingo.symbio.store.state.jdbc.hsqldb;
 
-import java.util.UUID;
-
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.Configuration.TestConfiguration;
-import io.vlingo.symbio.store.common.jdbc.hsqldb.HSQLDBConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.HSQLBootstrapProvider;
 import io.vlingo.symbio.store.state.StateStore.StorageDelegate;
 import io.vlingo.symbio.store.state.jdbc.JDBCStateStoreActorTest;
 
@@ -24,8 +22,8 @@ public class HSQLDBJDBCStateStoreActorTest extends JDBCStateStoreActorTest {
   }
 
   @Override
-  protected TestConfiguration testConfiguration(final DataFormat format) throws Exception {
-    System.out.println("Starting: HSQLDBJDBCTextStateStoreActorTest: testConfiguration()");
-    return HSQLDBConfigurationProvider.testConfiguration(format, UUID.randomUUID().toString());
+  protected DbBootstrap getBootstrap(DataFormat dataFormat) {
+    return new HSQLBootstrapProvider().getBootstrap(dataFormat);
   }
+
 }

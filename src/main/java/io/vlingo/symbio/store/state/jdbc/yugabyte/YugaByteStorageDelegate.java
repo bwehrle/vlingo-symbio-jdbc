@@ -11,8 +11,10 @@ import io.vlingo.actors.Logger;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.state.jdbc.postgres.PostgresStorageDelegate;
 
+import java.sql.Connection;
+
 public class YugaByteStorageDelegate extends PostgresStorageDelegate {
-    public YugaByteStorageDelegate(Configuration configuration, Logger logger) {
-        super(configuration, logger);
+    public YugaByteStorageDelegate(final Connection connection, final Configuration configuration, Logger logger) {
+        super(connection, configuration, logger);
     }
 }

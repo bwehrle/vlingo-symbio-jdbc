@@ -7,21 +7,7 @@
 
 package io.vlingo.symbio.store.journal.jdbc;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.function.Consumer;
-import java.util.stream.Collectors;
-
 import com.google.gson.Gson;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.actors.Address;
 import io.vlingo.actors.Definition;
@@ -30,18 +16,13 @@ import io.vlingo.common.Failure;
 import io.vlingo.common.Success;
 import io.vlingo.common.Tuple2;
 import io.vlingo.common.identity.IdentityGenerator;
-import io.vlingo.symbio.BaseEntry;
+import io.vlingo.symbio.*;
 import io.vlingo.symbio.BaseEntry.TextEntry;
-import io.vlingo.symbio.Entry;
-import io.vlingo.symbio.EntryAdapterProvider;
-import io.vlingo.symbio.Metadata;
-import io.vlingo.symbio.Source;
-import io.vlingo.symbio.State;
 import io.vlingo.symbio.State.TextState;
-import io.vlingo.symbio.StateAdapterProvider;
 import io.vlingo.symbio.store.Result;
 import io.vlingo.symbio.store.StorageException;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 import io.vlingo.symbio.store.dispatch.Dispatchable;
 import io.vlingo.symbio.store.dispatch.Dispatcher;
@@ -51,11 +32,20 @@ import io.vlingo.symbio.store.journal.Journal;
 import io.vlingo.symbio.store.journal.JournalReader;
 import io.vlingo.symbio.store.journal.StreamReader;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+
 public class JDBCJournalActor extends Actor implements Journal<String> {
     private final EntryAdapterProvider entryAdapterProvider;
     private final StateAdapterProvider stateAdapterProvider;
     private final Configuration configuration;
-    private final Connection connection;
+    private final ConnectionProvider connectionProvider;
+    private Connection connection;
     private final DatabaseType databaseType;
     private final Gson gson;
     private final Map<String, JournalReader<TextEntry>> journalReaders;
@@ -63,25 +53,28 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
     private final IdentityGenerator dispatchablesIdentityGenerator;
     private final Dispatcher<Dispatchable<Entry<String>, TextState>> dispatcher;
     private final DispatcherControl dispatcherControl;
+    private boolean hasCreatedTables;
+    private JDBCQueries queries;
 
-    private final JDBCQueries queries;
-
-    public JDBCJournalActor(final Configuration configuration) throws Exception {
-        this(null, configuration, 0L, 0L);
+    public JDBCJournalActor(final Configuration configuration, final ConnectionProvider connectionProvider) throws Exception {
+        this(null, configuration, connectionProvider, 0L, 0L);
     }
 
-    public JDBCJournalActor(final Dispatcher<Dispatchable<Entry<String>, TextState>> dispatcher, final Configuration configuration) throws Exception {
-        this(dispatcher, configuration, 1000L, 1000L);
+    public JDBCJournalActor(final Dispatcher<Dispatchable<Entry<String>, TextState>> dispatcher,
+                            final Configuration configuration,
+                            final ConnectionProvider connectionProvider) throws Exception {
+        this(dispatcher, configuration, connectionProvider, 1000L, 1000L);
     }
 
-    public JDBCJournalActor(final Dispatcher<Dispatchable<Entry<String>, TextState>> dispatcher, final Configuration configuration,
-                            final long checkConfirmationExpirationInterval, final long confirmationExpiration) throws Exception {
+    public JDBCJournalActor(final Dispatcher<Dispatchable<Entry<String>, TextState>> dispatcher,
+                            final Configuration configuration,
+                            final ConnectionProvider connectionProvider,
+                            final long checkConfirmationExpirationInterval,
+                            final long confirmationExpiration) throws Exception {
+        this.hasCreatedTables = false;
         this.configuration = configuration;
-        this.connection = configuration.connection;
         this.databaseType = configuration.databaseType;
-        this.connection.setAutoCommit(false);
-        this.queries = JDBCQueries.queriesFor(configuration.connection);
-        this.queries.createTables();
+        this.connectionProvider = connectionProvider;
         this.gson = new Gson();
         this.entryAdapterProvider = EntryAdapterProvider.instance(stage().world());
         this.stateAdapterProvider = StateAdapterProvider.instance(stage().world());
@@ -93,13 +86,16 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
         if (dispatcher != null) {
             this.dispatcher = dispatcher;
             final JDBCDispatcherControlDelegate dispatcherControlDelegate =
-                    new JDBCDispatcherControlDelegate(Configuration.cloneOf(configuration), stage().world().defaultLogger());
+                    new JDBCDispatcherControlDelegate(connectionProvider,
+                                                        Configuration.cloneOf(configuration),
+                                                        stage().world().defaultLogger());
+
             this.dispatcherControl = stage().actorFor(DispatcherControl.class,
                     Definition.has(DispatcherControlActor.class,
                             Definition.parameters(dispatcher,
-                                    dispatcherControlDelegate,
-                                    checkConfirmationExpirationInterval,
-                                    confirmationExpiration)
+                                                dispatcherControlDelegate,
+                                                checkConfirmationExpirationInterval,
+                                                confirmationExpiration)
                     )
             );
         } else {
@@ -107,6 +103,19 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
             this.dispatcherControl = null;
         }
     }
+
+    private void reuseOrOpenConnection() throws SQLException {
+        if (connection == null || connection.isClosed()) {
+            connection = connectionProvider.connection();
+            connection.setAutoCommit(false);
+            queries = JDBCQueries.queriesFor(connection);
+            if (!hasCreatedTables && configuration.createTables) {
+                queries.createTables();
+                hasCreatedTables = true;
+            }
+        }
+    }
+
 
     @Override
     public void stop() {
@@ -116,6 +125,7 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
 
         try {
             queries.close();
+            connection.close();
         } catch (SQLException e) {
             // ignore
         }
@@ -126,6 +136,7 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
     @Override
     public <S, ST> void append(final String streamName, final int streamVersion, final Source<S> source, final Metadata metadata,
                                final AppendResultInterest interest, final Object object) {
+
         final Consumer<Exception> whenFailed = (e) -> appendResultedInFailure(streamName, streamVersion, source, null, interest, object, e);
         final Entry<String> entry = asEntry(source, metadata, whenFailed);
         insertEntry(streamName, streamVersion, entry, whenFailed);
@@ -219,6 +230,7 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
 
     protected final void insertEntry(final String streamName, final int streamVersion, final Entry<String> entry, final Consumer<Exception> whenFailed) {
         try {
+            reuseOrOpenConnection();
             final Tuple2<PreparedStatement, Optional<String>> insertEntry =
                     queries.prepareInsertEntryQuery(
                             streamName,
@@ -250,6 +262,7 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
 
     protected final void insertSnapshot(final String streamName, final int streamVersion, final TextState snapshotState, final Consumer<Exception> whenFailed) {
         try {
+            reuseOrOpenConnection();
             final Tuple2<PreparedStatement, Optional<String>> insertSnapshot =
                     queries.prepareInsertSnapshotQuery(
                             streamName,
@@ -275,6 +288,7 @@ public class JDBCJournalActor extends Actor implements Journal<String> {
         String dbType = configuration.databaseType.toString();
 
         try {
+            reuseOrOpenConnection();
             final String entries = dispatchable.hasEntries() ?
                     dispatchable.entries().stream().map(Entry::id).collect(Collectors.joining(JDBCDispatcherControlDelegate.DISPATCHEABLE_ENTRIES_DELIMITER)) :
                     "";

@@ -7,15 +7,18 @@
 
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.BiFunction;
-
+import io.vlingo.actors.Logger;
+import io.vlingo.symbio.*;
+import io.vlingo.symbio.store.StorageException;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
+import io.vlingo.symbio.store.dispatch.Dispatchable;
+import io.vlingo.symbio.store.object.*;
+import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMode;
+import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMultiResults;
+import io.vlingo.symbio.store.object.ObjectStoreReader.QuerySingleResult;
+import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreDelegate;
+import io.vlingo.symbio.store.object.jdbc.jdbi.UnitOfWork.AlwaysModifiedUnitOfWork;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.Jdbi;
 import org.jdbi.v3.core.generic.GenericType;
@@ -23,25 +26,10 @@ import org.jdbi.v3.core.mapper.RowMapper;
 import org.jdbi.v3.core.result.ResultBearing;
 import org.jdbi.v3.core.statement.Update;
 
-import io.vlingo.actors.Logger;
-import io.vlingo.symbio.BaseEntry;
-import io.vlingo.symbio.Entry;
-import io.vlingo.symbio.Metadata;
-import io.vlingo.symbio.State;
-import io.vlingo.symbio.StateAdapterProvider;
-import io.vlingo.symbio.store.StorageException;
-import io.vlingo.symbio.store.common.jdbc.Configuration;
-import io.vlingo.symbio.store.dispatch.Dispatchable;
-import io.vlingo.symbio.store.object.ObjectStoreReader;
-import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMode;
-import io.vlingo.symbio.store.object.ObjectStoreReader.QueryMultiResults;
-import io.vlingo.symbio.store.object.ObjectStoreReader.QuerySingleResult;
-import io.vlingo.symbio.store.object.PersistentEntry;
-import io.vlingo.symbio.store.object.QueryExpression;
-import io.vlingo.symbio.store.object.StateObject;
-import io.vlingo.symbio.store.object.StateObjectMapper;
-import io.vlingo.symbio.store.object.jdbc.JDBCObjectStoreDelegate;
-import io.vlingo.symbio.store.object.jdbc.jdbi.UnitOfWork.AlwaysModifiedUnitOfWork;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiFunction;
 
 /**
  * The {@code JDBCObjectStoreDelegate} for Jdbi.
@@ -51,7 +39,8 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
   private static final UnitOfWork AlwaysModified = new AlwaysModifiedUnitOfWork();
 
   private final StateAdapterProvider stateAdapterProvider;
-  private final Handle handle;
+  private final ConnectionProvider connectionProvider;
+  private Handle handle;
   private final Logger logger;
   private final Map<Class<?>, StateObjectMapper> mappers;
   private final Map<Long, UnitOfWork> unitOfWorkRegistry;
@@ -67,22 +56,36 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
    * @param mappers                            collection of {@code PersistentObjectMapper} to be registered
    * @param logger                             the instance of {@link Logger} to be used
    */
-  public JdbiObjectStoreDelegate(final Configuration configuration, final StateAdapterProvider stateAdapterProvider,
-          final QueryExpression unconfirmedDispatchablesExpression, final Collection<StateObjectMapper> mappers, final Logger logger) {
+  public JdbiObjectStoreDelegate(final Configuration configuration,
+                                 final ConnectionProvider connectionProvider,
+                                 final StateAdapterProvider stateAdapterProvider,
+                                 final QueryExpression unconfirmedDispatchablesExpression,
+                                 final Collection<StateObjectMapper> mappers,
+                                 final Logger logger) {
     super(configuration);
-    this.handle = Jdbi.open(configuration.connection);
+    this.connectionProvider = connectionProvider;
     this.stateAdapterProvider = stateAdapterProvider;
     this.unconfirmedDispatchablesExpression = unconfirmedDispatchablesExpression;
     this.mappers = new HashMap<>();
     this.unitOfWorkRegistry = new ConcurrentHashMap<>();
     this.updateId = 0;
     this.logger = logger;
-    initialize();
 
     mappers.forEach(mapper -> {
       this.mappers.put(mapper.type(), mapper);
-      this.handle.registerRowMapper((RowMapper<?>) mapper.queryMapper());
     });
+  }
+
+  private void reuseOrOpenHandle() {
+    try {
+      if (this.connection == null || connection.isClosed()) {
+        close();
+        connection = connectionProvider.connection();
+        initializeJdbi();
+      }
+    }catch (SQLException sqlEx) {
+      throw new IllegalStateException(sqlEx.getMessage(), sqlEx);
+    }
   }
 
   /*
@@ -91,7 +94,9 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
   @Override
   public void close() {
     try {
-      handle.close();
+      if (handle != null) {
+        handle.close();
+      }
     } catch (final Exception e) {
       logger.error("Close failed because: " + e.getMessage(), e);
     }
@@ -100,7 +105,11 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
   @Override
   public JDBCObjectStoreDelegate copy() {
     try {
-      return new JdbiObjectStoreDelegate(Configuration.cloneOf(configuration), stateAdapterProvider, this.unconfirmedDispatchablesExpression, mappers.values(),
+      return new JdbiObjectStoreDelegate(Configuration.cloneOf(configuration),
+              connectionProvider,
+              stateAdapterProvider,
+              this.unconfirmedDispatchablesExpression,
+              mappers.values(),
               logger);
     } catch (final Exception e) {
       final String message = "Copy of JDBCObjectStoreDelegate failed because: " + e.getMessage();
@@ -111,22 +120,26 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public void beginTransaction() {
+    reuseOrOpenHandle();
     handle.begin();
   }
 
   @Override
   public void completeTransaction() {
+    reuseOrOpenHandle();
     handle.commit();
   }
 
   @Override
   public void failTransaction() {
+    reuseOrOpenHandle();
     handle.rollback();
   }
 
   @Override
   public <T extends StateObject> Collection<State<?>> persistAll(final Collection<T> persistentObjects, final long updateId, final Metadata metadata)
           throws StorageException {
+    reuseOrOpenHandle();
     final boolean create = ObjectStoreReader.isNoId(updateId);
     final UnitOfWork unitOfWork = unitOfWorkRegistry.getOrDefault(updateId, AlwaysModified);
     final List<State<?>> states = new ArrayList<>();
@@ -143,6 +156,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public <T extends StateObject> State<?> persist(final T persistentObject, final long updateId, final Metadata metadata) throws StorageException {
+    reuseOrOpenHandle();
     final State<?> state = getRawState(metadata, persistentObject);
     final boolean createLikely = state.dataVersion <= 1;
     final boolean create = createLikely ? ObjectStoreReader.isNoId(updateId) : false;
@@ -164,6 +178,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public void persistEntries(final Collection<Entry<?>> entries) throws StorageException {
+    reuseOrOpenHandle();
     final JdbiPersistMapper mapper = mappers.get(Entry.class).persistMapper();
     for (final Entry<?> entry : entries) {
       final Update statement = handle.createUpdate(mapper.insertStatement);
@@ -175,6 +190,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public void persistDispatchable(final Dispatchable<Entry<?>, State<?>> dispatchable) throws StorageException {
+    reuseOrOpenHandle();
     final JdbiPersistMapper mapper = mappers.get(dispatchable.getClass()).persistMapper();
     final Update statement = handle.createUpdate(mapper.insertStatement);
     bindAll(new PersistentDispatchable(configuration.originatorId, dispatchable), mapper, statement).execute();
@@ -183,7 +199,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
   @Override
   public QueryMultiResults queryAll(final QueryExpression expression) throws StorageException {
     final List<?> results;
-
+    reuseOrOpenHandle();
     if (expression.isListQueryExpression()) {
       results = handle.createQuery(expression.query).bindList(BindListKey, expression.asListQueryExpression().parameters).mapTo(expression.type).list();
     } else if (expression.isMapQueryExpression()) {
@@ -198,7 +214,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
   @Override
   public QuerySingleResult queryObject(final QueryExpression expression) throws StorageException {
     final Optional<?> result;
-
+    reuseOrOpenHandle();
     if (expression.isListQueryExpression()) {
       result = handle.createQuery(expression.query).bindList(BindListKey, expression.asListQueryExpression().parameters).mapTo(expression.type).findFirst();
     } else if (expression.isMapQueryExpression()) {
@@ -250,6 +266,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public Collection<Dispatchable<Entry<?>, State<?>>> allUnconfirmedDispatchableStates() {
+    reuseOrOpenHandle();
     return handle.createQuery(unconfirmedDispatchablesExpression.query)
             .mapTo(new GenericType<Dispatchable<Entry<?>, State<?>>>() {})
             .list();
@@ -257,6 +274,7 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
 
   @Override
   public void confirmDispatched(final String dispatchId) {
+    reuseOrOpenHandle();
     final JdbiPersistMapper mapper = mappers.get(Dispatchable.class).persistMapper();
     handle.createUpdate(mapper.updateStatement).bind("id", dispatchId).execute();
   }
@@ -273,11 +291,16 @@ public class JdbiObjectStoreDelegate extends JDBCObjectStoreDelegate {
     return statement;
   }
 
-  private void initialize() {
+  private void initializeJdbi() {
     // It is strange to me, but the only way to support real atomic
     // transactions (vs each statement is a transaction) in Jdbi is
     // to set the connection to auto-commit true. This seems intuitively
     // backwards, but fact nonetheless.
+    handle = Jdbi.open(connection);
+    mappers.forEach( (key,mapper) -> {
+      this.handle.registerRowMapper((RowMapper<?>) mapper.queryMapper());
+    });
+
     try {
       handle.getConnection().setAutoCommit(true);
     } catch (final Exception e) {

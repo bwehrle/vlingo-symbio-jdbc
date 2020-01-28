@@ -12,15 +12,20 @@ import io.vlingo.symbio.State;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.object.ObjectStoreDelegate;
 
+import java.sql.Connection;
+
 /**
  * The {@code JDBCObjectStoreDelegate} abstract base used by
  * {@code JDBCObjectStoreActor} to interact with specific delegates,
  * and also extended by any number of those concrete delegates.
  */
 public abstract class JDBCObjectStoreDelegate implements ObjectStoreDelegate<Entry<?>, State<?>> {
-  public static enum Type { Jdbi, JDBC, JPA };
 
-  public final Configuration configuration;
+    protected Connection connection;
+
+    public enum Type { Jdbi, JDBC, JPA };
+
+    public final Configuration configuration;
 
   /**
    * Constructs my default state.

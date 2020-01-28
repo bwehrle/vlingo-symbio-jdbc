@@ -8,21 +8,24 @@
 package io.vlingo.symbio.store.state.jdbc.mysql;
 
 import io.vlingo.symbio.store.DataFormat;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.MySqlBootstrap;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.common.jdbc.mysql.MySQLConfigurationProvider;
 import io.vlingo.symbio.store.state.StateStore;
 import io.vlingo.symbio.store.state.jdbc.JDBCStateStoreActorTest;
 
 public class MySQLJDBCStateStoreActorTest extends JDBCStateStoreActorTest {
+
     @Override
     protected StateStore.StorageDelegate delegate() throws Exception {
         System.out.println("Starting: MySQLJDBCTextStateStoreActorTest: delegate()");
-        return new MySQLStorageDelegate(configuration, world.defaultLogger());
+        return new MySQLStorageDelegate(connection, configuration, world.defaultLogger());
     }
 
     @Override
-    protected Configuration.TestConfiguration testConfiguration(DataFormat format) throws Exception {
-        System.out.println("Starting: MySQLJDBCTextStateStoreActorTest: testConfiguration()");
-        return MySQLConfigurationProvider.testConfiguration(DataFormat.Text);
+    protected DbBootstrap getBootstrap(DataFormat dataFormat) {
+        return new MySqlBootstrap().getBootstrap(dataFormat);
     }
+
 }

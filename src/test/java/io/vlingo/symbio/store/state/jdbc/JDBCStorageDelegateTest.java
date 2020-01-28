@@ -11,9 +11,12 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -28,23 +31,23 @@ import io.vlingo.symbio.store.state.Entity1;
 import io.vlingo.symbio.store.state.StateTypeStateStoreMap;
 
 public abstract class JDBCStorageDelegateTest {
-    private Configuration.TestConfiguration configuration;
+    private Configuration configuration;
     private JDBCStorageDelegate<Object> delegate;
     private String entity1StoreName;
     private World world;
+    private DbBootstrap dbBootstrap;
+    private Connection connection;
 
     @Test
     public void testThatDatabaseOpensTablesCreated() throws Exception {
-        configuration = testConfiguration(DataFormat.Text);
-        delegate = storageDelegate(configuration, world.defaultLogger());
+        delegate = storageDelegate(connection, configuration, world.defaultLogger());
 
         assertNotNull(delegate);
     }
 
     @Test
     public void testThatTextWritesRead() throws Exception {
-        configuration = testConfiguration(DataFormat.Text);
-        delegate = storageDelegate(configuration, world.defaultLogger());
+        delegate = storageDelegate(connection, configuration, world.defaultLogger());
 
         assertNotNull(delegate);
 
@@ -66,8 +69,7 @@ public abstract class JDBCStorageDelegateTest {
 
     @Test
     public void testThatTextStatesUpdate() throws Exception {
-        configuration = testConfiguration(DataFormat.Text);
-        delegate = storageDelegate(configuration, world.defaultLogger());
+        delegate = storageDelegate(connection, configuration, world.defaultLogger());
 
         assertNotNull(delegate);
 
@@ -106,8 +108,8 @@ public abstract class JDBCStorageDelegateTest {
 
     @Test
     public void testThatBinaryWritesRead() throws Exception {
-        configuration = testConfiguration(DataFormat.Binary);
-        delegate = storageDelegate(configuration, world.defaultLogger());
+        Configuration binaryConfiguration = configuration.withFormat(DataFormat.Binary);
+        delegate = storageDelegate(connection, binaryConfiguration, world.defaultLogger());
 
         assertNotNull(delegate);
 
@@ -130,16 +132,23 @@ public abstract class JDBCStorageDelegateTest {
     @Before
     public void setUp() {
         world = World.startWithDefaults("test-store");
-
+        dbBootstrap = getBootstrap(DataFormat.Text);
+        dbBootstrap.startService();
+        configuration = dbBootstrap.createRandomDatabase();
+        connection = new ConnectionProvider(configuration).connection();
         entity1StoreName = Entity1.class.getSimpleName();
         StateTypeStateStoreMap.stateTypeToStoreName(Entity1.class, entity1StoreName);
     }
 
+    protected abstract DbBootstrap getBootstrap(DataFormat format);
+
     @After
     public void tearDown() throws Exception {
         delegate.close();
+        connection.close();
         Thread.sleep(1000);
-        configuration.cleanUp();
+        dbBootstrap.dropDatabase(configuration.databaseName);
+        dbBootstrap.stopService();
         Thread.sleep(1000);
         world.terminate();
     }
@@ -150,7 +159,9 @@ public abstract class JDBCStorageDelegateTest {
      * @param logger
      * @return
      */
-    protected abstract JDBCStorageDelegate<Object> storageDelegate(Configuration.TestConfiguration configuration, final Logger logger);
+    protected abstract JDBCStorageDelegate<Object> storageDelegate(final Connection connection,
+                                                                   final Configuration configuration,
+                                                                   final Logger logger);
 
     /**
      * Create specific test configuration.
@@ -158,5 +169,4 @@ public abstract class JDBCStorageDelegateTest {
      * @return
      * @throws Exception
      */
-    protected abstract Configuration.TestConfiguration testConfiguration(final DataFormat format) throws Exception;
 }

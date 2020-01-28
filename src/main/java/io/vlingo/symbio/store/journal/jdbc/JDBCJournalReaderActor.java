@@ -7,14 +7,7 @@
 
 package io.vlingo.symbio.store.journal.jdbc;
 
-import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-
 import com.google.gson.Gson;
-
 import io.vlingo.actors.Actor;
 import io.vlingo.common.Completes;
 import io.vlingo.common.Tuple2;
@@ -22,34 +15,57 @@ import io.vlingo.symbio.BaseEntry;
 import io.vlingo.symbio.BaseEntry.TextEntry;
 import io.vlingo.symbio.Metadata;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
+import io.vlingo.symbio.store.common.jdbc.ConnectionProvider;
 import io.vlingo.symbio.store.common.jdbc.DatabaseType;
 import io.vlingo.symbio.store.journal.JournalReader;
-import io.vlingo.symbio.store.journal.jdbc.JDBCQueries;
+
+import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class JDBCJournalReaderActor extends Actor implements JournalReader<TextEntry> {
-    private final Connection connection;
+    private final ConnectionProvider connectionProvider;
+    private Connection connection;
     private final DatabaseType databaseType;
     private final Gson gson;
     private final String name;
-    private final JDBCQueries queries;
-
+    private JDBCQueries queries;
     private long offset;
 
-    public JDBCJournalReaderActor(final Configuration configuration, final String name) throws SQLException {
-        this.connection = configuration.connection;
+    public JDBCJournalReaderActor(final Configuration configuration,
+                                  final ConnectionProvider connectionProvider,
+                                  final String name) throws SQLException {
+        this.connectionProvider = connectionProvider;
         this.databaseType = configuration.databaseType;
         this.name = name;
-
-        this.queries = JDBCQueries.queriesFor(this.connection);
-
         this.gson = new Gson();
-        retrieveCurrentOffset();
+
+        if (!reuseOrOpenConnection() || !retrieveCurrentOffset()) {
+            logger().error("vlingo-symbio-jdbc:journal-reader-" + databaseType + ": " + "Unable to initialize");
+            throw new IllegalStateException("Unable to initialize");
+        }
+    }
+
+    private boolean reuseOrOpenConnection() {
+        try {
+            if (connection == null || connection.isClosed()) {
+                connection = connectionProvider.connection();
+                this.queries = JDBCQueries.queriesFor(this.connection);
+            }
+            return true;
+        }catch (Exception e) {
+            logger().error("vlingo-symbio-jdbc:journal-reader-" + databaseType + ": " + e.getMessage(), e);
+            return false;
+        }
     }
 
     @Override
     public void close() {
       try {
         queries.close();
+        connection.close();
       } catch (SQLException e) {
         // ignore
       }
@@ -62,6 +78,10 @@ public class JDBCJournalReaderActor extends Actor implements JournalReader<TextE
 
     @Override
     public Completes<TextEntry> readNext() {
+        if (!reuseOrOpenConnection()) {
+            return completes().with(null);
+        }
+
         try (final ResultSet resultSet = queries.prepareSelectEntryQuery(offset).executeQuery()) {
             if (resultSet.next()) {
                 final Tuple2<TextEntry,Long> entry = entryFromResultSet(resultSet);
@@ -78,13 +98,18 @@ public class JDBCJournalReaderActor extends Actor implements JournalReader<TextE
 
     @Override
     public Completes<TextEntry> readNext(final String fromId) {
-      seekTo(fromId);
-      return readNext();
+        reuseOrOpenConnection();
+        seekTo(fromId);
+        return readNext();
     }
 
     @Override
     public Completes<List<TextEntry>> readNext(final int maximumEvents) {
         final List<TextEntry> events = new ArrayList<>(maximumEvents);
+
+        if (!reuseOrOpenConnection()) {
+            return completes().with(null);
+        }
 
         try (final ResultSet resultSet = queries.prepareSelectEntryBatchQuery(offset, maximumEvents).executeQuery()) {
             while (resultSet.next()) {
@@ -106,17 +131,23 @@ public class JDBCJournalReaderActor extends Actor implements JournalReader<TextE
     @Override
     public Completes<List<TextEntry>> readNext(final String fromId, final int maximumEntries) {
       seekTo(fromId);
+      reuseOrOpenConnection();
       return readNext(maximumEntries);
     }
 
     @Override
     public void rewind() {
         this.offset = 1;
+        reuseOrOpenConnection();
         updateCurrentOffset();
     }
 
     @Override
     public Completes<String> seekTo(final String id) {
+        if (!reuseOrOpenConnection()) {
+            return completes().with(String.valueOf(offset));
+        }
+
         switch (id) {
             case Beginning:
                 this.offset = 1;
@@ -139,6 +170,10 @@ public class JDBCJournalReaderActor extends Actor implements JournalReader<TextE
 
     @Override
     public Completes<Long> size() {
+        if (!reuseOrOpenConnection()) {
+            return completes().with(-1L);
+        }
+
         try (final ResultSet resultSet = queries.prepareSelectJournalCount().executeQuery()) {
           if (resultSet.next()) {
               final long count = resultSet.getLong(1);
@@ -166,17 +201,18 @@ public class JDBCJournalReaderActor extends Actor implements JournalReader<TextE
         return Tuple2.from(new BaseEntry.TextEntry(String.valueOf(id), classOfEvent, eventTypeVersion, entryData, eventMetadataDeserialized), id);
     }
 
-    private void retrieveCurrentOffset() {
+    private boolean retrieveCurrentOffset() {
         this.offset = 1;
-
         try (final ResultSet resultSet = queries.prepareSelectCurrentOffsetQuery(name).executeQuery()) {
             if (resultSet.next()) {
                 this.offset = resultSet.getLong(1);
                 connection.commit();
             }
+            return true;
         } catch (Exception e) {
             logger().error("vlingo-symbio-jdbc:journal-reader-" + databaseType + ": " + e.getMessage(), e);
             logger().error("vlingo-symbio-jdbc:journal-reader-" + databaseType + ": Rewinding the offset");
+            return false;
         }
     }
 

@@ -9,21 +9,27 @@ package io.vlingo.symbio.store.state.jdbc.postgres;
 
 import io.vlingo.actors.Logger;
 import io.vlingo.symbio.store.DataFormat;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.PostgresBootstrap;
+import io.vlingo.symbio.store.common.TestConfiguration;
 import io.vlingo.symbio.store.common.jdbc.Configuration;
 import io.vlingo.symbio.store.common.jdbc.postgres.PostgresConfigurationProvider;
 import io.vlingo.symbio.store.state.StateStore;
 import io.vlingo.symbio.store.state.jdbc.JDBCTextStateStoreEntryTest;
 
+import java.sql.Connection;
+
 public class PostgresJDBCTextStateStoreEntryTest extends JDBCTextStateStoreEntryTest {
 
     @Override
-    protected StateStore.StorageDelegate storageDelegate(Configuration.TestConfiguration configuration, Logger logger) {
-        return new PostgresStorageDelegate(configuration, logger);
+    protected StateStore.StorageDelegate storageDelegate(final Connection connection,
+                                                         final Configuration configuration,
+                                                         final Logger logger) {
+        return new PostgresStorageDelegate(connection, configuration, logger);
     }
 
     @Override
-    protected Configuration.TestConfiguration testConfiguration(DataFormat format) throws Exception {
-        System.out.println("Starting: PostgresJDBCTextStateStoreEntryActorTest: testConfiguration()");
-        return PostgresConfigurationProvider.testConfiguration(format);
+    protected DbBootstrap getBootstrap(DataFormat dataFormat) {
+        return new PostgresBootstrap().getBootstrap(dataFormat);
     }
 }

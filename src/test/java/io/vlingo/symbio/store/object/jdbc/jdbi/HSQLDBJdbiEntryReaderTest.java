@@ -8,14 +8,25 @@
 package io.vlingo.symbio.store.object.jdbc.jdbi;
 
 import io.vlingo.symbio.store.DataFormat;
-import io.vlingo.symbio.store.common.jdbc.hsqldb.HSQLDBConfigurationProvider;
+import io.vlingo.symbio.store.common.DbBootstrap;
+import io.vlingo.symbio.store.common.HSQLBootstrapProvider;
+import io.vlingo.symbio.store.common.jdbc.Configuration;
+
+import java.sql.Connection;
 
 public class HSQLDBJdbiEntryReaderTest extends JdbiObjectStoreEntryReaderTest {
 
   @Override
-  protected JdbiOnDatabase jdbiOnDatabase() throws Exception {
-    final JdbiOnDatabase jdbi = JdbiOnHSQLDB.openUsing(HSQLDBConfigurationProvider.testConfiguration(DataFormat.Text));
+  protected JdbiOnDatabase jdbiOnDatabase(final Configuration configuration,
+                                          final Connection connection) throws Exception {
+    final JdbiOnDatabase jdbi = JdbiOnHSQLDB.openUsing(configuration);
+    jdbi.provisionConnection(connection);
     jdbi.handle().execute("DROP SCHEMA PUBLIC CASCADE");
     return jdbi;
+  }
+
+  @Override
+  protected DbBootstrap createDbBootstrap() {
+    return new HSQLBootstrapProvider().getBootstrap(DataFormat.Text);
   }
 }
